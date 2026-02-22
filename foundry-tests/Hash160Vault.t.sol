@@ -1,1 +1,122 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.30;
+
+import "contracts/Hash160Vault.sol";
+
+interface Vm {
+    function deal(address who, uint256 newBalance) external;
+    function prank(address sender) external;
+    function expectRevert(bytes calldata) external;
+}
+
+contract Test {
+    Vm internal constant vm = Vm(0x7109709ECfa91a80626fF3989D68f67F5b1DD12D);
+
+    function assertEq(uint256 a, uint256 b, string memory message) internal pure {
+        require(a == b, message);
+    }
+}
+
+contract MockIdentity is IFastPathIdentity {
+    mapping(bytes20 => address) private controller;
+
+    function setController(bytes20 hash160, address evm) external {
+        controller[hash160] = evm;
+    }
+
+    function currentController(bytes20 btcHash160) external view returns (address) {
+        return controller[btcHash160];
+    }
+}
+
+contract MockERC20 is IERC20 {
+    string public name = "Mock";
+    string public symbol = "MOCK";
+    uint8 public decimals = 18;
+    uint256 public totalSupply;
+
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+        totalSupply += amount;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transfer(address to, uint256 amount) external returns (bool) {
+        require(balanceOf[msg.sender] >= amount, "balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        require(allowed >= amount, "allowance");
+        require(balanceOf[from] >= amount, "balance");
+        allowance[from][msg.sender] = allowed - amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+
+contract Hash160VaultTest is Test {
+    Hash160Vault private vault;
+    MockIdentity private identity;
+    MockERC20 private token;
+
+    bytes20 private hash160 = bytes20(keccak256("hash160"));
+    address private controller = address(0xBEEF);
+
+    function setUp() public {
+        identity = new MockIdentity();
+        vault = new Hash160Vault(address(identity));
+        token = new MockERC20();
+
+        identity.setController(hash160, controller);
+    }
+
+    function testWithdrawAllETH() public {
+        vm.deal(address(this), 1 ether);
+        vault.depositETH{value: 1 ether}(hash160);
+
+        uint256 beforeBal = controller.balance;
+        vm.prank(controller);
+        vault.withdrawAllETH(hash160);
+
+        assertEq(controller.balance, beforeBal + 1 ether, "controller did not receive ETH");
+        assertEq(address(vault).balance, 0, "vault not emptied");
+    }
+
+    function testWithdrawAllERC20() public {
+        token.mint(address(this), 1_000);
+        token.approve(address(vault), 1_000);
+        vault.depositERC20(hash160, address(token), 1_000);
+
+        uint256 beforeBal = token.balanceOf(controller);
+        vm.prank(controller);
+        vault.withdrawAllERC20(hash160, address(token));
+
+        assertEq(token.balanceOf(controller), beforeBal + 1_000, "controller did not receive tokens");
+        assertEq(token.balanceOf(address(vault)), 0, "vault not emptied");
+    }
+
+    function testWithdrawAllETH_RevertsWhenZero() public {
+        vm.prank(controller);
+        vm.expectRevert(abi.encodeWithSelector(Hash160Vault.ZeroAmount.selector));
+        vault.withdrawAllETH(hash160);
+    }
+
+    function testWithdrawAllERC20_RevertsWhenZero() public {
+        vm.prank(controller);
+        vm.expectRevert(abi.encodeWithSelector(Hash160Vault.ZeroAmount.selector));
+        vault.withdrawAllERC20(hash160, address(token));
+    }
+}
 
