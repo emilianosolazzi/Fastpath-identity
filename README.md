@@ -96,6 +96,7 @@ All contracts target **Solidity 0.8.30** with Foundry. The test suite includes 1
 | PublicBitcoinGateway | `0xc87D98735fc7300A4e708841a6074A2F30495b06` |
 | DemoUSD | `0x6227e26f3b705e9e0d395cb9cf501a0190ec0510` |
 | BitID| `0xc82364194A0Cc009DdD77203595A8eA782b8E9EA` |
+| BitIDRewardDistributor| `0xE179eea5B5272Ba9A8896A50dFfb425d6D89d2b0` |
 
 
 ---
