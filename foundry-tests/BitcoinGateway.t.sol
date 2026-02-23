@@ -208,12 +208,12 @@ contract BitcoinGatewayTest is Test {
     // FULFILL PAYMENT TESTS
     // ══════════════════════════════════════════════════════════════════════════
 
-    function test_fulfillPayment_revertsZeroFee() public {
+    function test_fulfillPayment_revertsInsufficientFee() public {
         vm.prank(user1);
         gateway.sendBitcoin("a", "b", SATS, "");
 
         vm.prank(registeredUser);
-        vm.expectRevert(BitcoinGateway.ZeroAmount.selector);
+        vm.expectRevert(BitcoinGateway.InsufficientProofFee.selector);
         gateway.submitBitcoinProof{value: 0}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
     }
 
