@@ -4,12 +4,19 @@ pragma solidity 0.8.30;
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /**
- * @title BitcoinGateway v.1.1.0
+ * @dev Minimal interface for BitIDRewardDistributor — only what BitcoinGateway needs
+ */
+interface IBitIDRewardDistributor {
+    function reward(address user, uint8 action) external;
+}
+
+/**
+ * @title BitcoinGateway v.1.3.0
  * @author FastPath-Hash160 by - Emiliano Solazzi 
- * @notice Public gateway for Bitcoin transaction coordination with ETH fee collection
- * @dev This contract coordinates Bitcoin payment requests with decentralized relayer support
- *      Fees are collected in ETH at fulfillment time and distributed between protocol and relayers
- *      Bitcoin finality is the security anchor - all requests require minimum BTC amount
+ * @notice On-chain registry for Bitcoin payment intents with proof recording.
+ * @dev Bitcoin sends happen peer-to-peer on the Bitcoin network. This contract records the
+ *      intent (fromBtcAddress, toBtcAddress, sats) and the fulfillment proof (btcTxid, pubkey).
+ *      No ETH is locked. The registered user pays a small ETH fee at fulfillment time that goes to protocol.
  * 
  * Security considerations:
  * - All external calls use checks-effects-interactions (CEI) pattern
@@ -29,9 +36,6 @@ contract BitcoinGateway is ReentrancyGuard {
     
     /// @notice Thrown when contract is paused
     error ContractPaused();
-    
-    /// @notice Thrown when relayer address is zero
-    error ZeroRelayer();
     
     /// @notice Thrown when amount is zero
     error ZeroAmount();
@@ -54,29 +58,14 @@ contract BitcoinGateway is ReentrancyGuard {
     /// @notice Thrown when proof length is not 64 bytes
     error InvalidProofLength();
     
-    /// @notice Thrown when trying to mark failed too soon
-    error TooSoonToMarkFailed();
-    
     /// @notice Thrown when fingerprint is already registered
     error FingerprintAlreadyRegistered();
     
-    /// @notice Thrown when relayer is already registered
-    error RelayerAlreadyRegistered();
+    /// @notice Thrown when user is already registered
+    error UserAlreadyRegistered();
     
-    /// @notice Thrown when relayer is not registered
-    error RelayerNotRegistered();
-    
-    /// @notice Thrown when caller is not the assigned relayer
-    error NotAssignedRelayer();
-    
-    /// @notice Thrown when request is not stuck (24h not passed)
-    error RequestNotStuck();
-    
-    /// @notice Thrown when request has expired (past max age)
-    error RequestExpired();
-    
-    /// @notice Thrown when caller is not the requester
-    error NotRequester();
+    /// @notice Thrown when user is not registered
+    error UserNotRegistered();
     
     /// @notice Thrown when address is blacklisted
     error AddressBlacklisted();
@@ -106,9 +95,6 @@ contract BitcoinGateway is ReentrancyGuard {
     /// @notice Address that receives protocol fees
     address public feeRecipient;
     
-    /// @notice Default centralized relayer address
-    address public relayer;
-    
     /// @notice Total payment requests created
     uint256 public requestCount;
     
@@ -118,39 +104,30 @@ contract BitcoinGateway is ReentrancyGuard {
     /// @notice Blacklisted addresses mapping
     mapping(address user => bool isBlacklisted) public blacklisted;
 
-    /// @notice Fingerprint to relayer address mapping
-    mapping(bytes32 fingerprint => address relayerAddress) public fingerprintToRelayer;
+    /// @notice Fingerprint to registered user address mapping
+    mapping(bytes32 fingerprint => address userAddress) public fingerprintToUser;
     
-    /// @notice Relayer address to fingerprint mapping
-    mapping(address relayerAddress => bytes32 fingerprint) public relayerToFingerprint;
+    /// @notice Registered user address to fingerprint mapping
+    mapping(address userAddress => bytes32 fingerprint) public userToFingerprint;
     
-    /// @notice Request ID to fulfilling relayer address (recorded at fulfillment)
-    mapping(uint256 requestId => address fulfillingRelayer) public requestToFulfillingRelayer;
+    /// @notice Request ID to the user who submitted proof (recorded at fulfillment)
+    mapping(uint256 requestId => address prover) public requestToProver;
 
     /// @notice Total protocol fees accumulated in ETH
     uint256 public totalProtocolFeesEth;
+
+    /// @notice BitID reward distributor — zero address means rewards are disabled
+    IBitIDRewardDistributor public rewardDistributor;
 
     // ══════════════════════════════════════════════════════════════════════════════
     // CONSTANTS
     // ══════════════════════════════════════════════════════════════════════════════
 
-    /// @dev Total fee in basis points (0.25%)
-    uint256 private constant _TOTAL_FEE_BPS = 25;
-    
-    /// @dev Relayer fee portion in basis points (0.17%)
-    uint256 private constant _RELAYER_FEE_BPS = 17;
-    
-    /// @dev Time window for stuck request cancellation
-    uint256 private constant _ONE_DAY = 24 hours;
-    
-    /// @dev Maximum request age before auto-expiration
-    uint256 private constant _MAX_REQUEST_AGE = 7 days;
-    
-    /// @dev Basis points denominator
-    uint256 private constant _BPS_DENOMINATOR = 10_000;
-    
     /// @dev Minimum BTC amount (dust limit) - Bitcoin security anchor
     uint256 private constant _MIN_BTC_DUST = 600;
+
+    /// @dev BitIDRewardDistributor action index for a gateway relay (GATEWAY_RELAY = 3)
+    uint8 private constant _GATEWAY_RELAY_ACTION = 3;
 
     // ══════════════════════════════════════════════════════════════════════════════
     // STRUCTS
@@ -161,20 +138,18 @@ contract BitcoinGateway is ReentrancyGuard {
      * @dev Struct is packed for gas efficiency:
      *      Slot 0: requester (20) + fulfilled (1) + timestamp (8) = 29 bytes
      *      Slot 1: amountSats (32)
-     *      Slot 2: amountEth (32)
-     *      Slot 3: btcTxid (32)
-     *      Slot 4+: strings (dynamic)
+     *      Slot 2: btcTxid (32)
+     *      Slot 3+: strings (dynamic)
      */
     struct PaymentRequest {
         address requester;      // 20 bytes |
         bool fulfilled;         //  1 byte  | slot 0 (29 bytes packed)
         uint64 timestamp;       //  8 bytes |
         uint256 amountSats;     // slot 1
-        uint256 amountEth;      // slot 2
-        bytes32 btcTxid;        // slot 3
-        string fromBtcAddress;  // slot 4+
-        string toBtcAddress;    // slot 5+
-        string memo;            // slot 6+
+        bytes32 btcTxid;        // slot 2
+        string fromBtcAddress;  // slot 3+
+        string toBtcAddress;    // slot 4+
+        string memo;            // slot 5+
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
@@ -194,7 +169,6 @@ contract BitcoinGateway is ReentrancyGuard {
         string indexed fromBtcAddress,
         string indexed toBtcAddress,
         uint256 amountSats,
-        uint256 amountEth,
         address requester
     );
     
@@ -207,9 +181,6 @@ contract BitcoinGateway is ReentrancyGuard {
         uint256 amountSats
     );
     
-    /// @notice Emitted when a Bitcoin payment fails
-    event BitcoinPaymentFailed(uint256 indexed requestId, string reason);
-    
     /// @notice Emitted with proof of Bitcoin transaction
     event BitcoinTransactionProof(
         uint256 indexed requestId,
@@ -221,17 +192,14 @@ contract BitcoinGateway is ReentrancyGuard {
     /// @notice Emitted when pause state changes
     event PauseStateChanged(bool indexed isPaused);
     
-    /// @notice Emitted when default relayer is updated
-    event RelayerUpdated(address indexed oldRelayer, address indexed newRelayer);
-    
     /// @notice Emitted when ownership is transferred
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     
-    /// @notice Emitted when a relayer registers
-    event RelayerRegistered(address indexed relayerAddress, bytes32 indexed fingerprint);
+    /// @notice Emitted when a user registers their machine
+    event UserRegistered(address indexed userAddress, bytes32 indexed fingerprint);
     
-    /// @notice Emitted when a relayer unregisters
-    event RelayerUnregistered(address indexed relayerAddress, bytes32 indexed fingerprint);
+    /// @notice Emitted when a user unregisters their machine
+    event UserUnregistered(address indexed userAddress, bytes32 indexed fingerprint);
     
     /// @notice Emitted when blacklist status changes
     event AddressBlacklistedUpdated(address indexed addr, bool indexed isBlacklisted);
@@ -241,9 +209,9 @@ contract BitcoinGateway is ReentrancyGuard {
     
     /// @notice Emitted when fee recipient is updated
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
-    
-    /// @notice Emitted when ETH is refunded to requester on cancel/expiry
-    event RefundIssued(uint256 indexed requestId, address indexed requester, uint256 amount);
+
+    /// @notice Emitted when the reward distributor is updated
+    event RewardDistributorUpdated(address indexed oldDistributor, address indexed newDistributor);
 
     // ══════════════════════════════════════════════════════════════════════════════
     // MODIFIERS
@@ -273,19 +241,15 @@ contract BitcoinGateway is ReentrancyGuard {
 
     /**
      * @notice Initializes the BitcoinGateway contract
-     * @param initialRelayer Initial default relayer address (cannot be zero)
      * @param initialFeeRecipient Initial fee recipient address (cannot be zero)
      */
-    constructor(address initialRelayer, address initialFeeRecipient) payable {
-        if (initialRelayer == address(0)) revert ZeroRelayer();
+    constructor(address initialFeeRecipient) {
         if (initialFeeRecipient == address(0)) revert ZeroFeeRecipient();
 
-        relayer = initialRelayer;
         feeRecipient = initialFeeRecipient;
         owner = msg.sender;
         
         emit OwnershipTransferred(address(0), msg.sender);
-        emit RelayerUpdated(address(0), initialRelayer);
         emit FeeRecipientUpdated(address(0), initialFeeRecipient);
     }
 
@@ -294,14 +258,15 @@ contract BitcoinGateway is ReentrancyGuard {
     // ══════════════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Request a Bitcoin payment (payable in ETH)
-     * @dev ETH sent with this call is used for fee calculation at fulfillment.
-     *      Minimum 600 sats required for Bitcoin security anchor.
+     * @notice Register a Bitcoin payment intent on-chain.
+     * @dev No ETH is locked. The actual BTC send happens on the Bitcoin network.
+     *      The registered user picks up this event and executes the BTC send,
+     *      then calls submitBitcoinProof to record the proof.
      * @param fromBtcAddress Source Bitcoin address
      * @param toBtcAddress Destination Bitcoin address
      * @param amountSats Amount in satoshis to send (minimum 600)
      * @param memo Optional memo for the transaction
-     * @return requestId Unique identifier for the created request
+     * @return requestId Unique identifier for the created record
      */
     function sendBitcoin(
         string calldata fromBtcAddress,
@@ -310,12 +275,10 @@ contract BitcoinGateway is ReentrancyGuard {
         string calldata memo
     )
         external
-        payable
         whenNotPaused
         notBlacklisted
         returns (uint256 requestId)
     {
-        if (msg.value == 0) revert ZeroAmount();
         return _sendBitcoinInternal(
             fromBtcAddress,
             toBtcAddress,
@@ -350,7 +313,6 @@ contract BitcoinGateway is ReentrancyGuard {
             fromBtcAddress,
             toBtcAddress,
             amountSats,
-            msg.value,
             msg.sender
         );
     }
@@ -383,7 +345,6 @@ contract BitcoinGateway is ReentrancyGuard {
         req.fromBtcAddress = fromBtcAddress;
         req.toBtcAddress = toBtcAddress;
         req.amountSats = amountSats;
-        req.amountEth = msg.value;
         req.timestamp = uint64(block.timestamp);
         req.memo = memo;
     }
@@ -393,49 +354,29 @@ contract BitcoinGateway is ReentrancyGuard {
     // ══════════════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Fulfill a payment request (centralized relayer)
-     * @dev Only callable by the default relayer
-     * @param requestId ID of the request to fulfill
-     * @param btcTxid Bitcoin transaction ID
-     * @param publicKey Public key used for signing
+     * @notice Submit proof of a Bitcoin payment (registered user only).
+     * @dev Caller must be a registered user. A non-zero ETH fee must be sent
+     *      with this call — it goes entirely to the protocol treasury.
+     *      The actual BTC send must have already occurred on Bitcoin.
+     * @param requestId ID of the request being fulfilled
+     * @param btcTxid Bitcoin transaction ID proving the send occurred
+     * @param publicKey Public key of the signing user
      * @param proof Cryptographic proof (64 bytes)
      */
-    function fulfillPayment(
+    function submitBitcoinProof(
         uint256 requestId,
         bytes32 btcTxid,
         bytes calldata publicKey,
         bytes calldata proof
     )
         external
+        payable
         nonReentrant
         whenNotPaused
         notBlacklisted
     {
-        address _relayer = relayer;
-        if (msg.sender != _relayer) revert NotAssignedRelayer();
-        _fulfill(requestId, btcTxid, publicKey, proof, msg.sender);
-    }
-
-    /**
-     * @notice Fulfill a payment request (decentralized relayer)
-     * @dev Only callable by registered relayers. Relayer is recorded automatically.
-     * @param requestId ID of the request to fulfill
-     * @param btcTxid Bitcoin transaction ID
-     * @param publicKey Public key used for signing
-     * @param proof Cryptographic proof (64 bytes)
-     */
-    function fulfillPaymentAsRelayer(
-        uint256 requestId,
-        bytes32 btcTxid,
-        bytes calldata publicKey,
-        bytes calldata proof
-    )
-        external
-        nonReentrant
-        whenNotPaused
-        notBlacklisted
-    {
-        if (relayerToFingerprint[msg.sender] == bytes32(0)) revert RelayerNotRegistered();
+        if (msg.value == 0) revert ZeroAmount();
+        if (userToFingerprint[msg.sender] == bytes32(0)) revert UserNotRegistered();
         _fulfill(requestId, btcTxid, publicKey, proof, msg.sender);
     }
 
@@ -451,7 +392,7 @@ contract BitcoinGateway is ReentrancyGuard {
         bytes32 btcTxid,
         bytes calldata publicKey,
         bytes calldata proof,
-        address fulfillingRelayer
+        address prover
     ) internal {
         // Validation
         uint256 _requestCount = requestCount;
@@ -459,49 +400,32 @@ contract BitcoinGateway is ReentrancyGuard {
         
         PaymentRequest storage req = requests[requestId];
         if (req.fulfilled) revert AlreadyFulfilled();
-        if (uint256(req.timestamp) + _MAX_REQUEST_AGE < block.timestamp) revert RequestExpired();
         if (btcTxid == bytes32(0)) revert InvalidTxid();
         if (proof.length != 64) revert InvalidProofLength();
 
-        // Effects - update state before external calls (CEI pattern)
+        // Effects
         req.fulfilled = true;
         req.btcTxid = btcTxid;
         
-        // Record fulfilling relayer for audit trail
-        requestToFulfillingRelayer[requestId] = fulfillingRelayer;
+        // Record the user who submitted proof for audit trail
+        requestToProver[requestId] = prover;
 
-        // Calculate and distribute ETH fees
-        uint256 ethAmount = req.amountEth;
-        uint256 ethFee = (ethAmount * _TOTAL_FEE_BPS) / _BPS_DENOMINATOR;
-        
-        // Check if fulfiller is a registered relayer
-        bool isRegisteredRelayer = relayerToFingerprint[fulfillingRelayer] != bytes32(0);
-        
-        if (!isRegisteredRelayer || fulfillingRelayer == relayer) {
-            // Centralized relayer or unregistered - all fees to protocol
-            unchecked {
-                totalProtocolFeesEth += ethFee;
-            }
-        } else {
-            // Registered decentralized relayer - split fees
-            uint256 relayerFee = (ethFee * _RELAYER_FEE_BPS) / _TOTAL_FEE_BPS;
-            
-            uint256 protocolFee;
-            unchecked {
-                protocolFee = ethFee - relayerFee;
-                totalProtocolFeesEth += protocolFee;
-            }
-            
-            // Interaction - Transfer relayer fee immediately
-            if (relayerFee != 0) {
-                _safeTransferETH(fulfillingRelayer, relayerFee);
-            }
+        // Collect fulfillment fee from user into protocol treasury
+        unchecked {
+            totalProtocolFeesEth += msg.value;
         }
 
         emit BitcoinPaymentCompleted(
             requestId, btcTxid, req.fromBtcAddress, req.toBtcAddress, req.amountSats
         );
         emit BitcoinTransactionProof(requestId, publicKey, btcTxid, proof);
+
+        // Mint BitID reward to the prover — non-blocking: if distributor is not set
+        // or the epoch budget is exhausted, the proof still succeeds.
+        IBitIDRewardDistributor _distributor = rewardDistributor;
+        if (address(_distributor) != address(0)) {
+            try _distributor.reward(prover, _GATEWAY_RELAY_ACTION) {} catch {}
+        }
     }
 
     /**
@@ -513,105 +437,38 @@ contract BitcoinGateway is ReentrancyGuard {
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
-    // EXTERNAL FUNCTIONS - CANCELLATION
+    // EXTERNAL FUNCTIONS - USER MANAGEMENT
     // ══════════════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Cancel a stuck request after 24 hours and refund ETH
-     * @dev Only the original requester can cancel. Follows CEI pattern.
-     *      Marks request as fulfilled to prevent double-cancel, then refunds ETH.
-     * @param requestId ID of the request to cancel
-     */
-    function cancelStuckRequest(uint256 requestId) external nonReentrant whenNotPaused notBlacklisted {
-        uint256 _requestCount = requestCount;
-        if (requestId >= _requestCount) revert InvalidRequest();
-        
-        PaymentRequest storage req = requests[requestId];
-        address _requester = req.requester;
-        
-        if (msg.sender != _requester) revert NotRequester();
-        if (req.fulfilled) revert AlreadyFulfilled();
-
-        uint256 _timestamp = uint256(req.timestamp);
-        if (block.timestamp < _timestamp + _ONE_DAY) revert RequestNotStuck();
-
-        // Effects - mark as fulfilled before refund (CEI pattern)
-        uint256 refundAmount = req.amountEth;
-        req.fulfilled = true;
-        req.amountEth = 0;
-
-        emit BitcoinPaymentFailed(requestId, "Cancelled by requester (Stuck)");
-        emit RefundIssued(requestId, _requester, refundAmount);
-
-        // Interaction - refund ETH to requester
-        if (refundAmount != 0) {
-            _safeTransferETH(_requester, refundAmount);
-        }
-    }
-
-    /**
-     * @notice Cancel an expired request after 7 days (callable by anyone)
-     * @dev Allows anyone to trigger refund for requests past MAX_REQUEST_AGE.
-     *      This prevents ETH from being permanently locked in expired requests.
-     *      Follows CEI pattern.
-     * @param requestId ID of the request to cancel
-     */
-    function cancelExpiredRequest(uint256 requestId) external nonReentrant whenNotPaused {
-        uint256 _requestCount = requestCount;
-        if (requestId >= _requestCount) revert InvalidRequest();
-        
-        PaymentRequest storage req = requests[requestId];
-        if (req.fulfilled) revert AlreadyFulfilled();
-        if (uint256(req.timestamp) + _MAX_REQUEST_AGE >= block.timestamp) revert RequestNotStuck();
-
-        // Effects - mark as fulfilled before refund (CEI pattern)
-        address _requester = req.requester;
-        uint256 refundAmount = req.amountEth;
-        req.fulfilled = true;
-        req.amountEth = 0;
-
-        emit BitcoinPaymentFailed(requestId, "Auto-expired (7 days)");
-        emit RefundIssued(requestId, _requester, refundAmount);
-
-        // Interaction - refund ETH to requester
-        if (refundAmount != 0) {
-            _safeTransferETH(_requester, refundAmount);
-        }
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════════
-    // EXTERNAL FUNCTIONS - RELAYER MANAGEMENT
-    // ══════════════════════════════════════════════════════════════════════════════
-
-    /**
-     * @notice Register as a relayer with a machine fingerprint
+     * @notice Register your machine to become an approved user
      * @param machineFingerprint Unique machine fingerprint
      */
-    function registerRelayer(bytes32 machineFingerprint) external whenNotPaused notBlacklisted {
-        if (fingerprintToRelayer[machineFingerprint] != address(0)) {
+    function registerUser(bytes32 machineFingerprint) external whenNotPaused notBlacklisted {
+        if (fingerprintToUser[machineFingerprint] != address(0)) {
             revert FingerprintAlreadyRegistered();
         }
-        if (relayerToFingerprint[msg.sender] != bytes32(0)) {
-            revert RelayerAlreadyRegistered();
+        if (userToFingerprint[msg.sender] != bytes32(0)) {
+            revert UserAlreadyRegistered();
         }
 
-        fingerprintToRelayer[machineFingerprint] = msg.sender;
-        relayerToFingerprint[msg.sender] = machineFingerprint;
+        fingerprintToUser[machineFingerprint] = msg.sender;
+        userToFingerprint[msg.sender] = machineFingerprint;
 
-        emit RelayerRegistered(msg.sender, machineFingerprint);
+        emit UserRegistered(msg.sender, machineFingerprint);
     }
 
     /**
-     * @notice Unregister as a relayer
+     * @notice Unregister your machine
      */
-    function unregisterRelayer() external whenNotPaused {
-        bytes32 fingerprint = relayerToFingerprint[msg.sender];
-        if (fingerprint == bytes32(0)) revert RelayerNotRegistered();
+    function unregisterUser() external whenNotPaused {
+        bytes32 fingerprint = userToFingerprint[msg.sender];
+        if (fingerprint == bytes32(0)) revert UserNotRegistered();
 
-        delete fingerprintToRelayer[fingerprint];
-        delete relayerToFingerprint[msg.sender];
+        delete fingerprintToUser[fingerprint];
+        delete userToFingerprint[msg.sender];
 
-        emit RelayerUnregistered(msg.sender, fingerprint);
+        emit UserUnregistered(msg.sender, fingerprint);
     }
 
     /**
@@ -620,16 +477,16 @@ contract BitcoinGateway is ReentrancyGuard {
      * @return isAvailable True if available
      */
     function isFingerprintAvailable(bytes32 fingerprint) external view returns (bool isAvailable) {
-        return fingerprintToRelayer[fingerprint] == address(0);
+        return fingerprintToUser[fingerprint] == address(0);
     }
 
     /**
-     * @notice Get relayer address for a fingerprint
+     * @notice Get registered user address for a fingerprint
      * @param fingerprint Fingerprint to lookup
-     * @return relayerAddress Address of the relayer
+     * @return userAddress Address of the registered user
      */
-    function getRelayerByFingerprint(bytes32 fingerprint) external view returns (address relayerAddress) {
-        return fingerprintToRelayer[fingerprint];
+    function getUserByFingerprint(bytes32 fingerprint) external view returns (address userAddress) {
+        return fingerprintToUser[fingerprint];
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
@@ -667,18 +524,6 @@ contract BitcoinGateway is ReentrancyGuard {
     }
 
     /**
-     * @notice Update the default relayer address
-     * @param newRelayer New relayer address
-     */
-    function updateRelayer(address newRelayer) external onlyOwner {
-        if (newRelayer == address(0)) revert ZeroRelayer();
-        address oldRelayer = relayer;
-        if (oldRelayer == newRelayer) return;
-        relayer = newRelayer;
-        emit RelayerUpdated(oldRelayer, newRelayer);
-    }
-
-    /**
      * @notice Transfer contract ownership
      * @param newOwner New owner address
      */
@@ -700,6 +545,20 @@ contract BitcoinGateway is ReentrancyGuard {
         if (oldRecipient == newFeeRecipient) return;
         feeRecipient = newFeeRecipient;
         emit FeeRecipientUpdated(oldRecipient, newFeeRecipient);
+    }
+
+    /**
+     * @notice Set the BitID reward distributor contract
+     * @dev Pass zero address to disable rewards entirely.
+     *      The distributor must have this contract whitelisted as an authorized caller
+     *      via BitIDRewardDistributor.setCaller(address(this), true) before rewards flow.
+     * @param newDistributor Address of the deployed BitIDRewardDistributor, or zero to disable
+     */
+    function setRewardDistributor(address newDistributor) external onlyOwner {
+        address old = address(rewardDistributor);
+        if (old == newDistributor) return;
+        rewardDistributor = IBitIDRewardDistributor(newDistributor);
+        emit RewardDistributorUpdated(old, newDistributor);
     }
 
     /**
@@ -774,28 +633,5 @@ contract BitcoinGateway is ReentrancyGuard {
         return _MIN_BTC_DUST;
     }
 
-    /**
-     * @notice Get the maximum request age before auto-expiration
-     * @return maxAge Maximum age in seconds
-     */
-    function getMaxRequestAge() external pure returns (uint256 maxAge) {
-        return _MAX_REQUEST_AGE;
-    }
 
-    /**
-     * @notice Check if a request has expired
-     * @param requestId ID of the request
-     * @return expired True if the request has passed max age
-     */
-    function isRequestExpired(uint256 requestId) external view returns (bool expired) {
-        if (requestId >= requestCount) revert InvalidRequest();
-        PaymentRequest storage req = requests[requestId];
-        if (req.fulfilled) return false;
-        return uint256(req.timestamp) + _MAX_REQUEST_AGE < block.timestamp;
-    }
-
-    /**
-     * @dev Allow contract to receive ETH
-     */
-    receive() external payable {}
 }
