@@ -11,7 +11,7 @@ interface IBitIDRewardDistributor {
 }
 
 /**
- * @title BitcoinGateway v.1.3.0
+ * @title BitcoinGateway v.1.4.0
  * @author FastPath-Hash160 by - Emiliano Solazzi 
  * @notice On-chain registry for Bitcoin payment intents with proof recording.
  * @dev Bitcoin sends happen peer-to-peer on the Bitcoin network. This contract records the
@@ -85,6 +85,12 @@ contract BitcoinGateway is ReentrancyGuard {
     /// @notice Thrown when fee recipient is zero
     error ZeroFeeRecipient();
 
+    /// @notice Thrown when ETH sent is below the minimum proof fee
+    error InsufficientProofFee();
+
+    /// @notice Thrown when new proof fee is outside [MIN_PROOF_FEE, MAX_PROOF_FEE]
+    error ProofFeeOutOfRange();
+
     // ══════════════════════════════════════════════════════════════════════════════
     // STATE VARIABLES
     // ══════════════════════════════════════════════════════════════════════════════
@@ -119,6 +125,9 @@ contract BitcoinGateway is ReentrancyGuard {
     /// @notice BitID reward distributor — zero address means rewards are disabled
     IBitIDRewardDistributor public rewardDistributor;
 
+    /// @notice Minimum ETH required to submit a Bitcoin proof
+    uint256 public proofFee;
+
     // ══════════════════════════════════════════════════════════════════════════════
     // CONSTANTS
     // ══════════════════════════════════════════════════════════════════════════════
@@ -128,6 +137,12 @@ contract BitcoinGateway is ReentrancyGuard {
 
     /// @dev BitIDRewardDistributor action index for a gateway relay (GATEWAY_RELAY = 3)
     uint8 private constant _GATEWAY_RELAY_ACTION = 3;
+
+    /// @dev Minimum configurable proof fee (0.0002 ETH)
+    uint256 public constant MIN_PROOF_FEE = 0.0002 ether;
+
+    /// @dev Maximum configurable proof fee (0.001 ETH)
+    uint256 public constant MAX_PROOF_FEE = 0.001 ether;
 
     // ══════════════════════════════════════════════════════════════════════════════
     // STRUCTS
@@ -213,6 +228,9 @@ contract BitcoinGateway is ReentrancyGuard {
     /// @notice Emitted when the reward distributor is updated
     event RewardDistributorUpdated(address indexed oldDistributor, address indexed newDistributor);
 
+    /// @notice Emitted when the proof fee is updated
+    event ProofFeeUpdated(uint256 oldFee, uint256 newFee);
+
     // ══════════════════════════════════════════════════════════════════════════════
     // MODIFIERS
     // ══════════════════════════════════════════════════════════════════════════════
@@ -248,9 +266,11 @@ contract BitcoinGateway is ReentrancyGuard {
 
         feeRecipient = initialFeeRecipient;
         owner = msg.sender;
+        proofFee = MIN_PROOF_FEE;
         
         emit OwnershipTransferred(address(0), msg.sender);
         emit FeeRecipientUpdated(address(0), initialFeeRecipient);
+        emit ProofFeeUpdated(0, MIN_PROOF_FEE);
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
@@ -375,7 +395,7 @@ contract BitcoinGateway is ReentrancyGuard {
         whenNotPaused
         notBlacklisted
     {
-        if (msg.value == 0) revert ZeroAmount();
+        if (msg.value < proofFee) revert InsufficientProofFee();
         if (userToFingerprint[msg.sender] == bytes32(0)) revert UserNotRegistered();
         _fulfill(requestId, btcTxid, publicKey, proof, msg.sender);
     }
@@ -545,6 +565,19 @@ contract BitcoinGateway is ReentrancyGuard {
         if (oldRecipient == newFeeRecipient) return;
         feeRecipient = newFeeRecipient;
         emit FeeRecipientUpdated(oldRecipient, newFeeRecipient);
+    }
+
+    /**
+     * @notice Set the proof submission fee
+     * @dev Must be within [MIN_PROOF_FEE, MAX_PROOF_FEE].
+     * @param newFee New minimum ETH required to call submitBitcoinProof
+     */
+    function setProofFee(uint256 newFee) external onlyOwner {
+        if (newFee < MIN_PROOF_FEE || newFee > MAX_PROOF_FEE) revert ProofFeeOutOfRange();
+        uint256 old = proofFee;
+        if (old == newFee) return;
+        proofFee = newFee;
+        emit ProofFeeUpdated(old, newFee);
     }
 
     /**
