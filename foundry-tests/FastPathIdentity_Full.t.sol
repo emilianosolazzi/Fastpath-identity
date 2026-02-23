@@ -66,6 +66,32 @@ contract MaliciousDiscountNFT is IDiscountNFT {
     }
 }
 
+/// @dev Minimal ERC-20 mock that returns true on transferFrom.
+///      SafeERC20.safeTransferFrom only needs transferFrom(address,address,uint256)->bool.
+contract MockTokenTrue {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) {
+        uint256 allowed = allowance[from][msg.sender];
+        require(allowed >= amount, "allowance");
+        require(balanceOf[from] >= amount, "balance");
+        allowance[from][msg.sender] = allowed - amount;
+        balanceOf[from] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+}
+
 contract PayableReceiver {
     receive() external payable {}
 }
@@ -112,6 +138,14 @@ contract FastPathIdentityHarness is FastPathIdentity {
 
     function exposeBtcHash160FromPubkey(bytes memory pubkey) external pure returns (bytes20) {
         return btcHash160FromPubkeyMem(pubkey);
+    }
+
+    function exposeModSqrt(uint256 a, uint256 p) external pure returns (uint256) {
+        return modSqrt(a, p);
+    }
+
+    function exposeExpMod(uint256 base, uint256 exp, uint256 mod) external pure returns (uint256) {
+        return expMod(base, exp, mod);
     }
 }
 
@@ -282,6 +316,34 @@ contract FastPathIdentityFullTest is Test {
 
         bytes20 expectedHash = _btcHash160FromPubkeyMem(PUBKEY_UNCOMP);
         assertEq(identity.evmToBtc(signer), expectedHash, "42-byte message registration failed");
+    }
+
+    /// @notice Decompressing a 0x03-prefixed key produces an ODD Y that is on the secp256k1 curve.
+    ///         Uses PUBKEY_X (known valid) with prefix 0x03 to directly hit the odd-Y branch.
+    function testCryptoHelper_Decompress03_ProducesOddY() public {
+        FastPathIdentityHarness harness = new FastPathIdentityHarness();
+        // Same X as privkey 1, but force prefix 0x03 — decompression must pick the odd root
+        bytes memory comp03 = abi.encodePacked(bytes1(0x03), PUBKEY_X);
+        bytes memory uncompressed = harness.exposeDecompress(comp03);
+
+        // Must return a 65-byte uncompressed key starting with 0x04
+        assertEq(uncompressed.length, 65, "decompressed length must be 65");
+        assertEq(uint8(uncompressed[0]), 0x04, "must start with 0x04");
+
+        // Y is bytes 33-64; its last bit must be 1 (odd) for prefix 0x03
+        uint8 yLastByte = uint8(uncompressed[64]);
+        assertTrue((yLastByte & 1) == 1, "0x03 prefix must produce odd Y");
+
+        // Y must satisfy Y^2 = X^3 + 7 mod p (on-curve check)
+        uint256 p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F;
+        uint256 xUint = uint256(PUBKEY_X);
+        uint256 yUint;
+        for (uint256 i = 0; i < 32; i++) {
+            yUint = (yUint << 8) | uint8(uncompressed[33 + i]);
+        }
+        uint256 lhs = mulmod(yUint, yUint, p);
+        uint256 rhs = addmod(mulmod(xUint, mulmod(xUint, xUint, p), p), 7, p);
+        assertEq(lhs, rhs, "decompressed 0x03 Y must satisfy secp256k1 curve equation");
     }
 
     function testRegisterV2_InsufficientFee() public {
@@ -1566,6 +1628,114 @@ contract FastPathIdentityFullTest is Test {
 
         assertEq(receiverAddr.balance, 1.75 ether, "withdraw total wrong");
         assertEq(identity.pendingWithdrawals(receiverAddr), 0, "pending not cleared");
+    }
+
+    // ==========================================
+    // RECEIVEFUNDS / RECEIVETOKENS EDGE CASES
+    // ==========================================
+
+    function testReceiveFunds_ZeroValue_Reverts() public {
+        _setBtcToEvm(hash160, address(0x0000000000000000000000000000000000000001));
+
+        vm.expectRevert(bytes("Cannot send zero value"));
+        identity.receiveFunds{value: 0}(hash160);
+    }
+
+    function testReceiveTokens_ZeroAmount_Reverts() public {
+        _setBtcToEvm(hash160, address(0x0000000000000000000000000000000000000001));
+
+        vm.expectRevert(bytes("Cannot send zero amount"));
+        identity.receiveTokens(hash160, address(0x0000000000000000000000000000000000000001), 0);
+    }
+
+    function testReceiveTokens_ZeroToken_Reverts() public {
+        _setBtcToEvm(hash160, address(0x0000000000000000000000000000000000000001));
+
+        vm.expectRevert(bytes("Invalid token address"));
+        identity.receiveTokens(hash160, address(0), 1);
+    }
+
+    function testReceiveFunds_UnregisteredHash_Reverts() public {
+        bytes20 unknownHash = bytes20(keccak256("nobody-here"));
+        vm.deal(address(this), 1 ether);
+
+        vm.expectRevert(bytes("Hash160 not registered"));
+        identity.receiveFunds{value: 1 wei}(unknownHash);
+    }
+
+    /// @notice receiveTokens succeeds end-to-end with MockTokenTrue
+    function testReceiveTokens_Succeeds() public {
+        address receiver = address(0x000000000000000000000000000000000000cafE);
+        _setBtcToEvm(hash160, receiver);
+
+        vm.prank(receiver);
+        identity.setReceivePreference(FastPathIdentity.ReceivePreference.ViaHash160);
+
+        MockTokenTrue token = new MockTokenTrue();
+        token.mint(address(this), 1000);
+        token.approve(address(identity), 1000);
+
+        identity.receiveTokens(hash160, address(token), 500);
+
+        assertEq(token.balanceOf(receiver), 500, "receiver should have tokens");
+        assertEq(token.balanceOf(address(this)), 500, "sender should have remainder");
+    }
+
+    // ==========================================
+    // RECEIVE PREFERENCE TESTS
+    // ==========================================
+
+    /// @notice Preference can be toggled back from ViaHash160 to DirectEVM
+    function testSetReceivePreference_CanSwitchBack() public {
+        // Default is DirectEVM (0). Switch to ViaHash160.
+        identity.setReceivePreference(FastPathIdentity.ReceivePreference.ViaHash160);
+        assertTrue(
+            identity.receivePreference(address(this)) == FastPathIdentity.ReceivePreference.ViaHash160,
+            "should be ViaHash160"
+        );
+
+        // Switch back to DirectEVM
+        identity.setReceivePreference(FastPathIdentity.ReceivePreference.DirectEVM);
+        assertTrue(
+            identity.receivePreference(address(this)) == FastPathIdentity.ReceivePreference.DirectEVM,
+            "should be DirectEVM again"
+        );
+    }
+
+    // ==========================================
+    // GETRELINKSTATUS TESTS
+    // ==========================================
+
+    /// @notice getRelinkStatus with no pending relink returns cooldownRemaining from lastLinkTime
+    function testGetRelinkStatus_NoPending_ReturnsCooldownRemaining() public {
+        bytes20 testHash = bytes20(keccak256("relink-status-test"));
+
+        // Set lastLinkTime to now
+        _setLastLinkTime(testHash, block.timestamp);
+
+        (bool hasPending, address pendingNewEvm, uint256 unlockTime, uint256 cooldownRemaining) =
+            identity.getRelinkStatus(testHash);
+
+        assertTrue(!hasPending, "should have no pending");
+        assertEq(pendingNewEvm, address(0), "pendingNewEvm should be zero");
+        assertEq(unlockTime, 0, "unlockTime should be zero");
+        // relinkCooldown is 3 days, lastLinkTime is now, so cooldownRemaining should be ~3 days
+        assertEq(cooldownRemaining, identity.relinkCooldown(), "cooldown should equal relinkCooldown");
+    }
+
+    /// @notice getRelinkStatus with expired cooldown returns 0 cooldownRemaining
+    function testGetRelinkStatus_NoPending_ExpiredCooldown() public {
+        bytes20 testHash = bytes20(keccak256("relink-status-expired"));
+
+        // Set lastLinkTime far in the past
+        _setLastLinkTime(testHash, 1);
+        vm.warp(10 days);
+
+        (bool hasPending,,, uint256 cooldownRemaining) =
+            identity.getRelinkStatus(testHash);
+
+        assertTrue(!hasPending, "should have no pending");
+        assertEq(cooldownRemaining, 0, "cooldown should be expired");
     }
 
     // ==========================================
