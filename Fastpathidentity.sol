@@ -5,6 +5,13 @@ interface IDiscountNFT {
     function hasDiscount(address user) external view returns (bool);
 }
 
+/**
+ * @dev Minimal interface for BitIDRewardDistributor — only what FastPathIdentity needs
+ */
+interface IBitIDRewardDistributor {
+    function reward(address user, uint8 action) external;
+}
+
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
@@ -36,19 +43,32 @@ contract FastPathIdentity {
     error NoFeesToWithdraw();
     error ZeroHash160();
     error SignatureSMustBeLowOrder();
+    error FeeTooHigh();
+    error NotPendingOwner();
+    error ZeroAddress();
 
     /// @dev secp256k1 curve order n divided by 2, used to enforce low-s signatures (EIP-2).
     ///      Any signature with s > HALF_ORDER is malleable and must be rejected.
     uint256 private constant HALF_ORDER = 0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0;
 
+    /// @notice Cap on registration fee to prevent owner from bricking registrations
+    uint256 public constant MAX_REGISTRATION_FEE = 1 ether;
+
     // State variables
     address public owner;
+    address public pendingOwner;
     uint256 public registrationFee;
     address public discountNFT;
     bool private locked; // Reentrancy guard
     bool public relinkEnabled;
     uint256 public relinkCooldown;
     bool public emergencyStop;
+
+    /// @notice BitID reward distributor — zero address means rewards are disabled
+    IBitIDRewardDistributor public rewardDistributor;
+
+    /// @dev Action index for IDENTITY_REGISTRATION in BitIDRewardDistributor
+    uint8 private constant _IDENTITY_REGISTRATION_ACTION = 0;
 
     // Mappings
     /// @notice IMMUTABLE mapping from Bitcoin Hash160 (bytes20) to EVM address (first registrant forever).
@@ -83,6 +103,12 @@ contract FastPathIdentity {
     /// @dev This is the ONLY mapping that changes on relink. Use currentController() to read externally.
     ///      Three-layer model: btcToEvm (immutable origin) | evmToBtc (historical) | activeEvm (current authority)
     mapping(bytes20 => address) private activeEvm;
+
+    /// @notice Pull-payment balances: ETH credited via receiveFunds, claimable by receiver
+    mapping(address => uint256) public pendingWithdrawals;
+
+    /// @notice Protocol fees accumulated from registrations (separate from user deposits)
+    uint256 public accumulatedFees;
     
     // Events
     event BitcoinAddressRegistered(address indexed user, bytes20 btcHash160, uint256 feePaid);
@@ -94,8 +120,14 @@ contract FastPathIdentity {
     event RelinkCooldownUpdated(uint256 newCooldown);
     event RelinkToggled(bool enabled);
     event FundsReceived(bytes20 indexed btcHash160, address indexed receiver, uint256 amount, address token);
+    event PendingFundsDeposited(bytes20 indexed btcHash160, address indexed receiver, uint256 amount);
+    event PendingFundsWithdrawn(address indexed receiver, uint256 amount);
     event ReceivePreferenceUpdated(address indexed user, ReceivePreference preference);
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
+    event EmergencyStopToggled(bool disabled);
+    event DiscountNFTUpdated(address indexed nft);
+    event RewardDistributorUpdated(address indexed oldDistributor, address indexed newDistributor);
 
     constructor(uint256 _fee) payable {
         owner = msg.sender;
@@ -143,8 +175,10 @@ contract FastPathIdentity {
         if (message.length > 42) revert InvalidMessage();
 
         uint256 requiredFee = registrationFee;
-        if (discountNFT != address(0) && IDiscountNFT(discountNFT).hasDiscount(msg.sender)) {
-            requiredFee = (requiredFee * 90) / 100; // 10% discount
+        if (discountNFT != address(0)) {
+            try IDiscountNFT(discountNFT).hasDiscount(msg.sender) returns (bool hasDisc) {
+                if (hasDisc) requiredFee = (requiredFee * 90) / 100; // 10% discount
+            } catch {} // Malicious/broken NFT cannot brick registration
         }
         if (msg.value < requiredFee) revert InsufficientFee();
 
@@ -177,8 +211,16 @@ contract FastPathIdentity {
         evmToBtc[msg.sender] = btcHash160;
         lastLinkTime[btcHash160] = block.timestamp;
         activeEvm[btcHash160] = msg.sender;
+        accumulatedFees += msg.value;
 
         emit BitcoinAddressRegistered(msg.sender, btcHash160, msg.value);
+
+        // Mint BitID registration reward — non-blocking: distributor failure must never
+        // prevent a valid registration from being recorded.
+        IBitIDRewardDistributor _distributor = rewardDistributor;
+        if (address(_distributor) != address(0)) {
+            try _distributor.reward(msg.sender, _IDENTITY_REGISTRATION_ACTION) {} catch {}
+        }
     }
 
     /**
@@ -203,8 +245,10 @@ contract FastPathIdentity {
         bool bitcoinStyle
     ) external payable nonReentrant {
         uint256 requiredFee = registrationFee;
-        if (discountNFT != address(0) && IDiscountNFT(discountNFT).hasDiscount(msg.sender)) {
-            requiredFee = (requiredFee * 90) / 100; // 10% discount
+        if (discountNFT != address(0)) {
+            try IDiscountNFT(discountNFT).hasDiscount(msg.sender) returns (bool hasDisc) {
+                if (hasDisc) requiredFee = (requiredFee * 90) / 100; // 10% discount
+            } catch {} // Malicious/broken NFT cannot brick registration
         }
         if (msg.value < requiredFee) revert InsufficientFee();
 
@@ -249,39 +293,74 @@ contract FastPathIdentity {
         evmToBtc[msg.sender] = btcHash160;
         lastLinkTime[btcHash160] = block.timestamp;
         activeEvm[btcHash160] = msg.sender;
+        accumulatedFees += msg.value;
 
         emit BitcoinAddressRegistered(msg.sender, btcHash160, msg.value);
+
+        // Mint BitID registration reward — non-blocking
+        IBitIDRewardDistributor _distributor = rewardDistributor;
+        if (address(_distributor) != address(0)) {
+            try _distributor.reward(msg.sender, _IDENTITY_REGISTRATION_ACTION) {} catch {}
+        }
     }
 
     function setRegistrationFee(uint256 _fee) external onlyOwner {
+        if (_fee > MAX_REGISTRATION_FEE) revert FeeTooHigh();
         registrationFee = _fee;
         emit FeeUpdated(_fee);
     }
 
     function setDiscountNFT(address _nft) external onlyOwner {
         discountNFT = _nft;
+        emit DiscountNFTUpdated(_nft);
+    }
+
+    /**
+     * @notice Set the BitID reward distributor contract.
+     * @dev Pass zero address to disable rewards entirely.
+     *      The distributor must have this contract whitelisted via
+     *      BitIDRewardDistributor.setCaller(address(this), true) before rewards flow.
+     * @param newDistributor Address of deployed BitIDRewardDistributor, or zero to disable
+     */
+    function setRewardDistributor(address newDistributor) external onlyOwner {
+        address old = address(rewardDistributor);
+        if (old == newDistributor) return;
+        rewardDistributor = IBitIDRewardDistributor(newDistributor);
+        emit RewardDistributorUpdated(old, newDistributor);
     }
 
     function withdrawFees() external onlyOwner nonReentrant {
-        uint256 balance = address(this).balance;
-        if (balance == 0) revert NoFeesToWithdraw();
-        
-        // Emit event before external call (CEI pattern)
-        emit FeesWithdrawn(owner, balance);
-        
-        (bool success, ) = owner.call{value: balance}("");
+        uint256 amount = accumulatedFees;
+        if (amount == 0) revert NoFeesToWithdraw();
+
+        // Zero before external call (CEI pattern)
+        accumulatedFees = 0;
+
+        emit FeesWithdrawn(owner, amount);
+
+        (bool success, ) = owner.call{value: amount}("");
         if (!success) revert TransferFailed();
     }
 
     /**
-     * @notice Transfer contract ownership to a new address.
-     * @dev Callable only by the current owner. Emits OwnershipTransferred.
+     * @notice Initiate ownership transfer (two-step to prevent typo lockout).
+     * @dev Callable only by the current owner. New owner must call acceptOwnership().
      */
     function transferOwnership(address newOwner) external onlyOwner {
-        require(newOwner != address(0), "Zero address");
-        address previous = owner;
-        owner = newOwner;
-        emit OwnershipTransferred(previous, newOwner);
+        if (newOwner == address(0)) revert ZeroAddress();
+        pendingOwner = newOwner;
+        emit OwnershipTransferStarted(owner, newOwner);
+    }
+
+    /**
+     * @notice Accept pending ownership transfer.
+     * @dev Callable only by the pending owner set via transferOwnership().
+     */
+    function acceptOwnership() external {
+        if (msg.sender != pendingOwner) revert NotPendingOwner();
+        emit OwnershipTransferred(owner, pendingOwner);
+        owner = pendingOwner;
+        pendingOwner = address(0);
     }
 
     // ==========================================
@@ -306,6 +385,7 @@ contract FastPathIdentity {
 
     function emergencyDisableRelink(bool disable) external onlyOwner {
         emergencyStop = disable;
+        emit EmergencyStopToggled(disable);
     }
 
     // ==========================================
@@ -404,7 +484,7 @@ contract FastPathIdentity {
     }
 
     function cancelRelink(bytes20 btcHash160) external noEmergency {
-        address currentOwner = btcToEvm[btcHash160];
+        address currentOwner = activeEvm[btcHash160];
         if (currentOwner == address(0)) revert AddressNotRegistered();
         if (msg.sender != currentOwner) revert NotCurrentOwner();
         if (!pendingRelinks[btcHash160].exists) revert PendingRelinkMissing();
@@ -458,7 +538,11 @@ contract FastPathIdentity {
         emit ReceivePreferenceUpdated(msg.sender, preference);
     }
 
-    /// @notice Receive ETH via hash160 (only if user opted in via preference)
+    /// @notice Deposit ETH for a hash160 receiver (pull-payment pattern)
+    /// @dev ETH is credited to the receiver's pendingWithdrawals balance.
+    ///      Receiver calls withdrawPendingFunds() to claim.
+    ///      This avoids the 2300 gas stipend limitation that breaks multisigs,
+    ///      Safes, and contracts with non-trivial receive() functions.
     function receiveFunds(bytes20 btcHash160) external payable nonReentrant {
         if (btcHash160 == bytes20(0)) revert ZeroHash160();
         require(msg.value > 0, "Cannot send zero value");
@@ -466,18 +550,25 @@ contract FastPathIdentity {
         require(receiver != address(0), "Hash160 not registered");
         require(receivePreference[receiver] == ReceivePreference.ViaHash160, "User prefers direct EVM receiving");
 
-        // Emit event before external call (CEI pattern)
-        emit FundsReceived(btcHash160, receiver, msg.value, address(0));
+        pendingWithdrawals[receiver] += msg.value;
 
-        // Forward ETH with gas cap to prevent receiver gas-bomb griefing.
-        // 2300 gas matches the legacy `transfer()` stipend: enough for a receive/fallback
-        // event log but not enough for re-entrant calls or storage writes.
-        // Assembly avoids returndata copy (prevents returndata bomb).
-        bool success;
-        assembly {
-            success := call(2300, receiver, callvalue(), 0, 0, 0, 0)
-        }
-        require(success, "ETH transfer failed");
+        emit PendingFundsDeposited(btcHash160, receiver, msg.value);
+    }
+
+    /// @notice Withdraw all pending ETH deposited via receiveFunds
+    /// @dev Pull-payment: receiver initiates the transfer, no gas limit issues.
+    ///      Works with EOAs, multisigs, Safes, and any contract.
+    function withdrawPendingFunds() external nonReentrant {
+        uint256 amount = pendingWithdrawals[msg.sender];
+        require(amount > 0, "No pending funds");
+
+        // Zero balance before external call (CEI pattern)
+        pendingWithdrawals[msg.sender] = 0;
+
+        emit PendingFundsWithdrawn(msg.sender, amount);
+
+        (bool success, ) = msg.sender.call{value: amount}("");
+        if (!success) revert TransferFailed();
     }
 
     /// @notice Receive ERC20 tokens via hash160 (only if user opted in)
