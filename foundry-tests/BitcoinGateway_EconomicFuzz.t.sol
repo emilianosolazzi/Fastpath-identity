@@ -21,11 +21,11 @@ contract BitcoinGatewayEconomicFuzz {
     BitcoinGateway public gateway;
     address public attacker = address(0x1337);
     address public victim = address(0xDEAD);
-    address public relayer = address(0xBEEF);
+    address public registeredUser = address(0xBEEF);
     address public feeRecipient = address(0xFEED);
     
     function setUp() public {
-        gateway = new BitcoinGateway(relayer, feeRecipient);
+        gateway = new BitcoinGateway(feeRecipient);
         vm.deal(attacker, 100 ether);
         vm.deal(victim, 100 ether);
     }
@@ -65,7 +65,7 @@ contract BitcoinGatewayEconomicFuzz {
         return params;
     }
     
-    /// @notice Params for fulfillPayment (relayer path)
+    /// @notice Params for fulfillPayment (user path)
     function attackParamsFulfill() public pure returns (string[] memory) {
         string[] memory params = new string[](3);
         params[0] = "requestId:uint256";
@@ -92,34 +92,22 @@ contract BitcoinGatewayEconomicFuzz {
     // ATTACK SCENARIOS (What to fuzz)
     // ==========================================
     
-    /// @notice Scenario 1: Reentrancy in fulfillPayment (relayer fee distribution)
-    /// @dev Try to drain ETH via recursive calls when relayer fee is sent
+    /// @notice Scenario 1: Reentrancy in submitBitcoinProof (user pays fee in)
+    /// @dev ETH flows IN during proof submission, not out — reentrancy surface is minimal
     function scenarioReentrancyFulfill() public pure returns (string memory) {
-        return "fulfillPaymentAsRelayer";
+        return "submitBitcoinProof";
     }
-    
-    /// @notice Scenario 2: Reentrancy in cancelStuckRequest (refund path)
-    /// @dev Try to drain ETH via recursive calls when refund is sent
-    function scenarioCancelReentrancy() public pure returns (string memory) {
-        return "cancelStuckRequest";
-    }
-    
-    /// @notice Scenario 3: Reentrancy in cancelExpiredRequest (refund path)
-    /// @dev Try to drain ETH via recursive calls when expired refund is sent
-    function scenarioExpiredReentrancy() public pure returns (string memory) {
-        return "cancelExpiredRequest";
-    }
-    
-    /// @notice Scenario 4: Protocol fee theft via reentrancy
-    /// @dev Try to drain protocol fees via recursive withdrawProtocolFees
+
+    /// @notice Scenario 2: Protocol fee theft via reentrancy on withdrawProtocolFees
+    /// @dev Only ETH-out path in v1.3.0; protected by nonReentrant
     function scenarioFeeTheft() public pure returns (string memory) {
         return "withdrawProtocolFees";
     }
-    
-    /// @notice Scenario 5: Double-cancel exploit
-    /// @dev Try to cancel same request twice for double refund
-    function scenarioDoubleCancel() public pure returns (string memory) {
-        return "cancelStuckRequest,cancelStuckRequest";
+
+    /// @notice Scenario 3: Double-fulfillment exploit
+    /// @dev Try to mark same request fulfilled twice
+    function scenarioDoubleFulfill() public pure returns (string memory) {
+        return "submitBitcoinProof,submitBitcoinProof";
     }
     
     // ==========================================
@@ -143,10 +131,10 @@ contract BitcoinGatewayEconomicFuzz {
 }
 
 /**
- * @title Malicious Relayer for Reentrancy Testing
+ * @title Malicious User for Reentrancy Testing
  * @notice Contract that attempts to drain via reentrancy on fee receive
  */
-contract MaliciousRelayer {
+contract MaliciousUser {
     BitcoinGateway public target;
     uint256 public attackCount;
     uint256 public maxAttacks = 10;
@@ -156,7 +144,7 @@ contract MaliciousRelayer {
     }
     
     receive() external payable {
-        // Reentrancy attack when receiving relayer fee
+        // Reentrancy attack when receiving user fee
         if (attackCount < maxAttacks && address(target).balance > 0) {
             attackCount++;
             // Try to fulfill another request or withdraw fees
@@ -166,7 +154,8 @@ contract MaliciousRelayer {
     
     function startAttack(uint256 requestId, bytes32 btcTxid, bytes calldata publicKey, bytes calldata proof) external {
         attackCount = 0;
-        target.fulfillPaymentAsRelayer(requestId, btcTxid, publicKey, proof);
+        // User pays a fee in at proof submission time (v1.3.0 model)
+        target.submitBitcoinProof{value: 0.001 ether}(requestId, btcTxid, publicKey, proof);
     }
 }
 
@@ -184,8 +173,9 @@ contract MaliciousRequester {
         target = _target;
     }
     
-    function createRequest() external payable returns (uint256) {
-        requestId = target.sendBitcoin{value: msg.value}(
+    function createRequest() external returns (uint256) {
+        // sendBitcoin is free in v1.3.0 — no ETH locked
+        requestId = target.sendBitcoin(
             "bc1qmalicious",
             "bc1qvictim",
             1000,
@@ -195,17 +185,9 @@ contract MaliciousRequester {
     }
     
     receive() external payable {
-        // Reentrancy attack when receiving refund
+        // No refund reentrancy vector in v1.3.0 (no cancel/refund functions)
         if (attackCount < maxAttacks && address(target).balance > 0) {
             attackCount++;
-            // Try to cancel again (should fail due to fulfilled flag, but let's test)
-            try target.cancelStuckRequest(requestId) {} catch {}
         }
     }
-    
-    function startCancelAttack() external {
-        attackCount = 0;
-        target.cancelStuckRequest(requestId);
-    }
 }
-
