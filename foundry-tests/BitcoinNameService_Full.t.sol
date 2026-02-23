@@ -6,9 +6,10 @@ import "../empty_src/BitcoinNameService.sol";
 
 /**
  * @title Bitcoin Name Service — Full Test Suite
- * @notice 47 tests covering registration, resolution, expiry, renewal,
+ * @notice 72 tests covering registration, resolution, expiry, renewal,
  *         release, text records, clearText, token fees, subdomains,
- *         access control, relink integration, name validation, and edge cases.
+ *         access control, relink integration, name validation, edge cases,
+ *         and BitID burn behaviours.
  *
  * @dev Uses a MockFastPathIdentity to simulate the hash160 → EVM mapping
  *      without deploying the full FastPathIdentity contract.
@@ -72,6 +73,33 @@ contract MockWBTC {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// MOCK: BitID token with burnFrom, balance/allowance tracking
+// ═══════════════════════════════════════════════════════════════════
+
+contract MockBitID {
+    mapping(address => uint256) public balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+    uint256 public totalBurned;
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+
+    function burnFrom(address from, uint256 amount) external {
+        require(allowance[from][msg.sender] >= amount, "MockBitID: insufficient allowance");
+        require(balanceOf[from] >= amount, "MockBitID: insufficient balance");
+        allowance[from][msg.sender] -= amount;
+        balanceOf[from] -= amount;
+        totalBurned += amount;
+    }
+}
+
 contract BitcoinNameService_FullTest is Test {
     BitcoinNameService public bns;
     MockFastPathIdentity public mockIdentity;
@@ -106,7 +134,7 @@ contract BitcoinNameService_FullTest is Test {
         // ORPHAN_HASH160 intentionally has no controller (address(0))
 
         // Deploy BNS
-        bns = new BitcoinNameService(address(mockIdentity), FEE);
+        bns = new BitcoinNameService(address(mockIdentity), FEE, FEE);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -479,10 +507,16 @@ contract BitcoinNameService_FullTest is Test {
         assertFalse(avail, "Should be in grace period");
         assertEq(reason, "In grace period");
 
-        // Expired — past grace period
+        // In reclaim window — past 30-day grace, within 14-day reclaim
         vm.warp(block.timestamp + 16 days); // total: 365 + 31 days
         (avail, reason) = bns.available("satoshi");
-        assertTrue(avail, "Should be available after grace expires");
+        assertFalse(avail, "Should be in reclaim window");
+        assertEq(reason, "In reclaim window (previous owner priority)");
+
+        // Expired — past grace (30d) + reclaim (14d) = 44 days total
+        vm.warp(block.timestamp + 14 days); // total: 365 + 45 days
+        (avail, reason) = bns.available("satoshi");
+        assertTrue(avail, "Should be available after grace + reclaim expires");
         assertEq(reason, "Expired");
     }
 
@@ -495,8 +529,8 @@ contract BitcoinNameService_FullTest is Test {
         vm.prank(alice);
         bns.register{value: FEE}("satoshi", ALICE_HASH160);
 
-        // Expire past grace period
-        vm.warp(block.timestamp + 365 days + 31 days);
+        // Expire past grace (30d) + reclaim (14d) = 44 days total
+        vm.warp(block.timestamp + 365 days + 45 days);
 
         // Bob takes the name
         vm.prank(bob);
@@ -753,7 +787,7 @@ contract BitcoinNameService_FullTest is Test {
         bns.registerWithToken("satoshi", ALICE_HASH160);
 
         uint256 balBefore = wbtc.balanceOf(deployer);
-        bns.withdrawTokenFees(address(wbtc));
+        bns.withdrawTokenFees();
         uint256 balAfter = wbtc.balanceOf(deployer);
 
         assertEq(balAfter - balBefore, tokenFee, "Owner should receive token fees");
@@ -1112,9 +1146,191 @@ contract BitcoinNameService_FullTest is Test {
     }
 
     // ═══════════════════════════════════════════════════════════
+    // TEST 62: register() burns BitID when configured
+    // ═══════════════════════════════════════════════════════════
+
+    function test_Register_BitIDFee_BurnsTokens() public {
+        MockBitID bitidToken = new MockBitID();
+        uint256 bitidFee = 100_00000000; // 100 BitID (8 decimals)
+        bns.setBitID(address(bitidToken));
+        bns.setRegistrationBitIDFee(bitidFee);
+
+        bitidToken.mint(alice, bitidFee);
+
+        vm.startPrank(alice);
+        bitidToken.approve(address(bns), bitidFee);
+        bns.register{value: FEE}("satoshi", ALICE_HASH160);
+        vm.stopPrank();
+
+        assertEq(bitidToken.totalBurned(), bitidFee, "BitID should be burned on registration");
+        assertEq(bitidToken.balanceOf(alice), 0, "Alice balance should be zero after burn");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TEST 63: register() skips burn when fee is zero
+    // ═══════════════════════════════════════════════════════════
+
+    function test_Register_BitIDFee_Zero_NoBurn() public {
+        MockBitID bitidToken = new MockBitID();
+        bns.setBitID(address(bitidToken));
+        // registrationBitIDFee stays 0
+
+        // Register succeeds without any BitID minted/approved
+        vm.prank(alice);
+        bns.register{value: FEE}("satoshi", ALICE_HASH160);
+
+        assertEq(bitidToken.totalBurned(), 0, "No burn when fee is zero");
+        (address resolved,) = bns.resolve("satoshi");
+        assertEq(resolved, alice);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TEST 64: register() skips burn when bitid contract not set
+    // ═══════════════════════════════════════════════════════════
+
+    function test_Register_NoBitIDContract_NoBurn() public {
+        // Set a fee but no contract — condition `address(bitid) != address(0)` is false
+        bns.setRegistrationBitIDFee(100_00000000);
+        // bitid stays address(0)
+
+        vm.prank(alice);
+        bns.register{value: FEE}("satoshi", ALICE_HASH160);
+
+        (address resolved,) = bns.resolve("satoshi");
+        assertEq(resolved, alice, "Should register without BitID contract");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TEST 65: register() reverts when BitID allowance insufficient
+    // ═══════════════════════════════════════════════════════════
+
+    function test_Register_BitIDFee_InsufficientAllowance_Reverts() public {
+        MockBitID bitidToken = new MockBitID();
+        uint256 bitidFee = 100_00000000;
+        bns.setBitID(address(bitidToken));
+        bns.setRegistrationBitIDFee(bitidFee);
+
+        bitidToken.mint(alice, bitidFee);
+        // Alice does NOT approve — burnFrom will revert
+
+        vm.prank(alice);
+        vm.expectRevert(bytes("MockBitID: insufficient allowance"));
+        bns.register{value: FEE}("satoshi", ALICE_HASH160);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TEST 66: registerWithToken() also burns BitID
+    // ═══════════════════════════════════════════════════════════
+
+    function test_RegisterWithToken_BitIDFee_BurnsTokens() public {
+        MockWBTC wbtc = new MockWBTC();
+        MockBitID bitidToken = new MockBitID();
+        uint256 tokenFee = 100_000;
+        uint256 bitidFee = 50_00000000;
+
+        bns.setFeeToken(address(wbtc));
+        bns.setRegistrationFee(tokenFee);
+        bns.setBitID(address(bitidToken));
+        bns.setRegistrationBitIDFee(bitidFee);
+
+        wbtc.mint(alice, tokenFee);
+        bitidToken.mint(alice, bitidFee);
+
+        vm.startPrank(alice);
+        wbtc.approve(address(bns), tokenFee);
+        bitidToken.approve(address(bns), bitidFee);
+        bns.registerWithToken("satoshi", ALICE_HASH160);
+        vm.stopPrank();
+
+        assertEq(bitidToken.totalBurned(), bitidFee, "BitID burned on token registration");
+        assertEq(wbtc.balanceOf(address(bns)), tokenFee, "WBTC fee held by BNS");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TEST 67: renew() burns renewalBitIDFee
+    // ═══════════════════════════════════════════════════════════
+
+    function test_Renew_BitIDFee_BurnsTokens() public {
+        MockBitID bitidToken = new MockBitID();
+        uint256 renewBitidFee = 25_00000000; // 25 BitID
+        bns.setBitID(address(bitidToken));
+        bns.setRenewalBitIDFee(renewBitidFee);
+
+        vm.prank(alice);
+        bns.register{value: FEE}("satoshi", ALICE_HASH160);
+
+        bitidToken.mint(alice, renewBitidFee);
+
+        vm.startPrank(alice);
+        bitidToken.approve(address(bns), renewBitidFee);
+        bns.renew{value: FEE}("satoshi");
+        vm.stopPrank();
+
+        assertEq(bitidToken.totalBurned(), renewBitidFee, "BitID burned on renewal");
+        assertEq(bitidToken.balanceOf(alice), 0);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TEST 68: renew() skips BitID burn when renewalBitIDFee is zero
+    // ═══════════════════════════════════════════════════════════
+
+    function test_Renew_BitIDFee_Zero_NoBurn() public {
+        MockBitID bitidToken = new MockBitID();
+        bns.setBitID(address(bitidToken));
+        // renewalBitIDFee stays 0
+
+        vm.prank(alice);
+        bns.register{value: FEE}("satoshi", ALICE_HASH160);
+
+        vm.prank(alice);
+        bns.renew{value: FEE}("satoshi");
+
+        assertEq(bitidToken.totalBurned(), 0, "No burn when renewalBitIDFee is zero");
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TEST 69: setRegistrationBitIDFee above MAX_BITID_FEE reverts
+    // ═══════════════════════════════════════════════════════════
+
+    function test_SetRegistrationBitIDFee_TooHigh_Reverts() public {
+        uint256 overCap = bns.MAX_BITID_FEE() + 1;
+        vm.expectRevert(BitcoinNameService.FeeTooHigh.selector);
+        bns.setRegistrationBitIDFee(overCap);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TEST 70: setRenewalBitIDFee above MAX_BITID_FEE reverts
+    // ═══════════════════════════════════════════════════════════
+
+    function test_SetRenewalBitIDFee_TooHigh_Reverts() public {
+        uint256 overCap = bns.MAX_BITID_FEE() + 1;
+        vm.expectRevert(BitcoinNameService.FeeTooHigh.selector);
+        bns.setRenewalBitIDFee(overCap);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TEST 71: setRegistrationBitIDFee onlyOwner guard
+    // ═══════════════════════════════════════════════════════════
+
+    function test_SetRegistrationBitIDFee_NotOwner_Reverts() public {
+        vm.prank(alice);
+        vm.expectRevert(BitcoinNameService.NotOwner.selector);
+        bns.setRegistrationBitIDFee(100_00000000);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // TEST 72: setRenewalBitIDFee onlyOwner guard
+    // ═══════════════════════════════════════════════════════════
+
+    function test_SetRenewalBitIDFee_NotOwner_Reverts() public {
+        vm.prank(alice);
+        vm.expectRevert(BitcoinNameService.NotOwner.selector);
+        bns.setRenewalBitIDFee(100_00000000);
+    }
+
+    // ═══════════════════════════════════════════════════════════
     // RECEIVE — let deployer accept ETH withdrawals
     // ═══════════════════════════════════════════════════════════
 
     receive() external payable {}
 }
-
