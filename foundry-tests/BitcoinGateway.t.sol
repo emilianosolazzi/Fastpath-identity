@@ -77,7 +77,7 @@ contract BitcoinGatewayTest is Test {
     BitcoinGateway public gateway;
 
     address public owner = address(this);
-    address public relayerAddr = address(0xBEEF);
+    address public registeredUser = address(0xBEEF);
     address public feeRecipient = address(0xFEE);
     address public user1 = address(0x1111);
     address public user2 = address(0x2222);
@@ -89,17 +89,20 @@ contract BitcoinGatewayTest is Test {
     bytes constant DUMMY_PUBKEY = hex"0400000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002";
     bytes constant DUMMY_PROOF = hex"00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002";
 
-    uint256 constant SEND_VALUE = 1 ether;
+    uint256 constant RELAY_FEE = 0.001 ether;  // ETH paid by user at proof submission
     uint256 constant SATS = 100_000;
 
     // ── Setup ─────────────────────────────────────────────────────────────────
 
     function setUp() public {
-        gateway = new BitcoinGateway(relayerAddr, feeRecipient);
+        gateway = new BitcoinGateway(feeRecipient);
         vm.deal(user1, 100 ether);
         vm.deal(user2, 100 ether);
         vm.deal(user3, 100 ether);
-        vm.deal(relayerAddr, 10 ether);
+        vm.deal(registeredUser, 10 ether);
+        // Register the default user so they can call submitBitcoinProof
+        vm.prank(registeredUser);
+        gateway.registerUser(bytes32(uint256(0xCC)));
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -108,10 +111,6 @@ contract BitcoinGatewayTest is Test {
 
     function test_constructor_setsOwner() public view {
         assertEq(gateway.owner(), owner, "owner mismatch");
-    }
-
-    function test_constructor_setsRelayer() public view {
-        assertEq(gateway.relayer(), relayerAddr, "relayer mismatch");
     }
 
     function test_constructor_setsFeeRecipient() public view {
@@ -124,23 +123,17 @@ contract BitcoinGatewayTest is Test {
         assertEq(gateway.totalProtocolFeesEth(), 0, "fees should be 0");
     }
 
-    function test_constructor_revertsZeroRelayer() public {
-        vm.expectRevert(BitcoinGateway.ZeroRelayer.selector);
-        new BitcoinGateway(address(0), feeRecipient);
-    }
-
     function test_constructor_revertsZeroFeeRecipient() public {
         vm.expectRevert(BitcoinGateway.ZeroFeeRecipient.selector);
-        new BitcoinGateway(relayerAddr, address(0));
+        new BitcoinGateway(address(0));
     }
-
     // ══════════════════════════════════════════════════════════════════════════
     // SEND BITCOIN TESTS
     // ══════════════════════════════════════════════════════════════════════════
 
     function test_sendBitcoin_createsRequest() public {
         vm.prank(user1);
-        uint256 id = gateway.sendBitcoin{value: SEND_VALUE}(
+        uint256 id = gateway.sendBitcoin(
             "bc1qsender", "bc1qreceiver", SATS, "test memo"
         );
         assertEq(id, 0, "first request should be 0");
@@ -149,23 +142,22 @@ contract BitcoinGatewayTest is Test {
 
     function test_sendBitcoin_storesCorrectData() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}(
+        gateway.sendBitcoin(
             "bc1qsender", "bc1qreceiver", SATS, "my memo"
         );
 
         BitcoinGateway.PaymentRequest memory req = gateway.getPaymentRequest(0);
         assertEq(req.requester, user1, "requester mismatch");
         assertEq(req.amountSats, SATS, "sats mismatch");
-        assertEq(req.amountEth, SEND_VALUE, "eth mismatch");
         assertFalse(req.fulfilled, "should not be fulfilled");
         assertEq(req.btcTxid, bytes32(0), "txid should be empty");
     }
 
     function test_sendBitcoin_multipleRequests() public {
         vm.startPrank(user1);
-        uint256 id0 = gateway.sendBitcoin{value: 1 ether}("a", "b", SATS, "");
-        uint256 id1 = gateway.sendBitcoin{value: 2 ether}("c", "d", SATS, "");
-        uint256 id2 = gateway.sendBitcoin{value: 3 ether}("e", "f", SATS, "");
+        uint256 id0 = gateway.sendBitcoin("a", "b", SATS, "");
+        uint256 id1 = gateway.sendBitcoin("c", "d", SATS, "");
+        uint256 id2 = gateway.sendBitcoin("e", "f", SATS, "");
         vm.stopPrank();
 
         assertEq(id0, 0);
@@ -174,33 +166,27 @@ contract BitcoinGatewayTest is Test {
         assertEq(gateway.requestCount(), 3);
     }
 
-    function test_sendBitcoin_revertsZeroValue() public {
-        vm.prank(user1);
-        vm.expectRevert(BitcoinGateway.ZeroAmount.selector);
-        gateway.sendBitcoin{value: 0}("a", "b", SATS, "");
-    }
-
     function test_sendBitcoin_revertsEmptyFrom() public {
         vm.prank(user1);
         vm.expectRevert(BitcoinGateway.EmptyFromAddress.selector);
-        gateway.sendBitcoin{value: 1 ether}("", "b", SATS, "");
+        gateway.sendBitcoin("", "b", SATS, "");
     }
 
     function test_sendBitcoin_revertsEmptyTo() public {
         vm.prank(user1);
         vm.expectRevert(BitcoinGateway.EmptyToAddress.selector);
-        gateway.sendBitcoin{value: 1 ether}("a", "", SATS, "");
+        gateway.sendBitcoin("a", "", SATS, "");
     }
 
     function test_sendBitcoin_revertsBelowDust() public {
         vm.prank(user1);
         vm.expectRevert(BitcoinGateway.BtcAmountBelowDust.selector);
-        gateway.sendBitcoin{value: 1 ether}("a", "b", 599, "");
+        gateway.sendBitcoin("a", "b", 599, "");
     }
 
     function test_sendBitcoin_exactDustLimit() public {
         vm.prank(user1);
-        uint256 id = gateway.sendBitcoin{value: 1 ether}("a", "b", 600, "");
+        uint256 id = gateway.sendBitcoin("a", "b", 600, "");
         assertEq(id, 0, "exact dust limit should work");
     }
 
@@ -208,412 +194,184 @@ contract BitcoinGatewayTest is Test {
         gateway.pause();
         vm.prank(user1);
         vm.expectRevert(BitcoinGateway.ContractPaused.selector);
-        gateway.sendBitcoin{value: 1 ether}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
     }
 
     function test_sendBitcoin_revertsWhenBlacklisted() public {
         gateway.setBlacklisted(user1, true);
         vm.prank(user1);
         vm.expectRevert(BitcoinGateway.AddressBlacklisted.selector);
-        gateway.sendBitcoin{value: 1 ether}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // FULFILL PAYMENT TESTS (CENTRALIZED RELAYER)
+    // FULFILL PAYMENT TESTS
     // ══════════════════════════════════════════════════════════════════════════
 
-    function test_fulfillPayment_success() public {
-        // Create request
+    function test_fulfillPayment_revertsZeroFee() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
-        // Fulfill as centralized relayer
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
-
-        BitcoinGateway.PaymentRequest memory req = gateway.getPaymentRequest(0);
-        assertTrue(req.fulfilled, "should be fulfilled");
-        assertEq(req.btcTxid, DUMMY_TXID, "txid mismatch");
-    }
-
-    function test_fulfillPayment_recordsFulfillingRelayer() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
-
-        assertEq(gateway.requestToFulfillingRelayer(0), relayerAddr, "fulfilling relayer mismatch");
-    }
-
-    function test_fulfillPayment_collectsFees() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
-
-        // 0.25% of 1 ether = 0.0025 ether
-        uint256 expectedFee = (SEND_VALUE * 25) / 10_000;
-        assertEq(gateway.totalProtocolFeesEth(), expectedFee, "fee mismatch");
-    }
-
-    function test_fulfillPayment_revertsNotRelayer() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        vm.prank(user2);
-        vm.expectRevert(BitcoinGateway.NotAssignedRelayer.selector);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        vm.prank(registeredUser);
+        vm.expectRevert(BitcoinGateway.ZeroAmount.selector);
+        gateway.submitBitcoinProof{value: 0}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
     }
 
     function test_fulfillPayment_revertsInvalidRequest() public {
-        vm.prank(relayerAddr);
+        vm.prank(registeredUser);
         vm.expectRevert(BitcoinGateway.InvalidRequest.selector);
-        gateway.fulfillPayment(99, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(99, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
     }
 
     function test_fulfillPayment_revertsAlreadyFulfilled() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        vm.prank(registeredUser);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
 
-        vm.prank(relayerAddr);
+        vm.prank(registeredUser);
         vm.expectRevert(BitcoinGateway.AlreadyFulfilled.selector);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
     }
 
     function test_fulfillPayment_revertsZeroTxid() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
-        vm.prank(relayerAddr);
+        vm.prank(registeredUser);
         vm.expectRevert(BitcoinGateway.InvalidTxid.selector);
-        gateway.fulfillPayment(0, bytes32(0), DUMMY_PUBKEY, DUMMY_PROOF);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, bytes32(0), DUMMY_PUBKEY, DUMMY_PROOF);
     }
 
     function test_fulfillPayment_revertsInvalidProofLength() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
-        vm.prank(relayerAddr);
+        vm.prank(registeredUser);
         vm.expectRevert(BitcoinGateway.InvalidProofLength.selector);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, hex"0011");
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, hex"0011");
     }
 
     function test_fulfillPayment_revertsWhenPaused() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
         gateway.pause();
 
-        vm.prank(relayerAddr);
+        vm.prank(registeredUser);
         vm.expectRevert(BitcoinGateway.ContractPaused.selector);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // FULFILL AS DECENTRALIZED RELAYER TESTS
+    // FULFILL AS REGISTERED USER TESTS
     // ══════════════════════════════════════════════════════════════════════════
 
-    function test_fulfillAsRelayer_success() public {
-        // Register user2 as relayer
+    function test_submitProof_success() public {
+        // Register user2 as approved user
         vm.prank(user2);
-        gateway.registerRelayer(FINGERPRINT_1);
+        gateway.registerUser(FINGERPRINT_1);
 
         // Create request
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
-        // Fulfill as registered relayer
+        // Submit proof as registered user (paying RELAY_FEE)
         vm.prank(user2);
-        gateway.fulfillPaymentAsRelayer(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
 
         assertTrue(gateway.getPaymentRequest(0).fulfilled, "should be fulfilled");
-        assertEq(gateway.requestToFulfillingRelayer(0), user2, "relayer mismatch");
+        assertEq(gateway.requestToProver(0), user2, "prover mismatch");
     }
 
-    function test_fulfillAsRelayer_splitsFees() public {
-        // Register user2 as relayer
+    function test_submitProof_collectsFee() public {
+        // Register user2 as approved user
         vm.prank(user2);
-        gateway.registerRelayer(FINGERPRINT_1);
+        gateway.registerUser(FINGERPRINT_1);
 
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        uint256 relayerBalBefore = user2.balance;
+        gateway.sendBitcoin("a", "b", SATS, "");
 
         vm.prank(user2);
-        gateway.fulfillPaymentAsRelayer(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
 
-        // Total fee = 0.25% of 1 ether = 0.0025 ether
-        uint256 totalFee = (SEND_VALUE * 25) / 10_000;
-        // Relayer gets 0.17% of the 0.25% = (totalFee * 17) / 25
-        uint256 relayerFee = (totalFee * 17) / 25;
-        uint256 protocolFee = totalFee - relayerFee;
-
-        assertEq(gateway.totalProtocolFeesEth(), protocolFee, "protocol fee mismatch");
-        assertEq(user2.balance, relayerBalBefore + relayerFee, "relayer should receive fee");
+        // Full RELAY_FEE goes to protocol; user earns in BTC off-chain
+        assertEq(gateway.totalProtocolFeesEth(), RELAY_FEE, "protocol should receive full fee");
     }
 
-    function test_fulfillAsRelayer_revertsNotRegistered() public {
+    function test_submitProof_revertsNotRegistered() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
         vm.prank(user2);
-        vm.expectRevert(BitcoinGateway.RelayerNotRegistered.selector);
-        gateway.fulfillPaymentAsRelayer(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        vm.expectRevert(BitcoinGateway.UserNotRegistered.selector);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // CANCEL STUCK REQUEST TESTS
+    // USER MANAGEMENT TESTS
     // ══════════════════════════════════════════════════════════════════════════
 
-    function test_cancelStuckRequest_success() public {
+    function test_registerUser_success() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.registerUser(FINGERPRINT_1);
 
-        uint256 userBalBefore = user1.balance;
-
-        // Warp 25 hours ahead
-        vm.warp(block.timestamp + 25 hours);
-
-        // Expect RefundIssued event
-        vm.expectEmit(true, true, false, true);
-        emit BitcoinGateway.RefundIssued(0, user1, SEND_VALUE);
-
-        vm.prank(user1);
-        gateway.cancelStuckRequest(0);
-
-        // Request should be marked fulfilled (prevents double-cancel)
-        assertTrue(gateway.getPaymentRequest(0).fulfilled, "cancel should set fulfilled");
-        // ETH should be refunded
-        assertEq(user1.balance, userBalBefore + SEND_VALUE, "user should get ETH refund");
-        // amountEth should be zeroed
-        assertEq(gateway.getPaymentRequest(0).amountEth, 0, "amountEth should be zeroed");
+        assertEq(gateway.fingerprintToUser(FINGERPRINT_1), user1, "fingerprint mapping wrong");
+        assertEq(gateway.userToFingerprint(user1), FINGERPRINT_1, "user mapping wrong");
     }
 
-    function test_cancelStuckRequest_preventsDoubleCancel() public {
+    function test_registerUser_revertsDuplicateFingerprint() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        vm.warp(block.timestamp + 25 hours);
-
-        vm.prank(user1);
-        gateway.cancelStuckRequest(0);
-
-        // Second cancel should revert (marked as fulfilled)
-        vm.prank(user1);
-        vm.expectRevert(BitcoinGateway.AlreadyFulfilled.selector);
-        gateway.cancelStuckRequest(0);
-    }
-
-    function test_cancelStuckRequest_revertsTooSoon() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        // Only 23 hours
-        vm.warp(block.timestamp + 23 hours);
-
-        vm.prank(user1);
-        vm.expectRevert(BitcoinGateway.RequestNotStuck.selector);
-        gateway.cancelStuckRequest(0);
-    }
-
-    function test_cancelStuckRequest_revertsNotRequester() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        vm.warp(block.timestamp + 25 hours);
-
-        vm.prank(user2);
-        vm.expectRevert(BitcoinGateway.NotRequester.selector);
-        gateway.cancelStuckRequest(0);
-    }
-
-    function test_cancelStuckRequest_revertsAlreadyFulfilled() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
-
-        vm.warp(block.timestamp + 25 hours);
-
-        vm.prank(user1);
-        vm.expectRevert(BitcoinGateway.AlreadyFulfilled.selector);
-        gateway.cancelStuckRequest(0);
-    }
-
-    function test_cancelStuckRequest_revertsInvalidRequest() public {
-        vm.prank(user1);
-        vm.expectRevert(BitcoinGateway.InvalidRequest.selector);
-        gateway.cancelStuckRequest(99);
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
-    // REQUEST EXPIRATION TESTS
-    // ══════════════════════════════════════════════════════════════════════════
-
-    function test_fulfillPayment_revertsExpired() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        // Warp past 7 days
-        vm.warp(block.timestamp + 7 days + 1);
-
-        vm.prank(relayerAddr);
-        vm.expectRevert(BitcoinGateway.RequestExpired.selector);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
-    }
-
-    function test_fulfillPayment_worksBeforeExpiry() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        // Warp to just under 7 days (6 days 23 hours)
-        vm.warp(block.timestamp + 6 days + 23 hours);
-
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
-        assertTrue(gateway.getPaymentRequest(0).fulfilled, "should fulfill before expiry");
-    }
-
-    function test_cancelExpiredRequest_success() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        uint256 userBalBefore = user1.balance;
-
-        // Warp past 7 days
-        vm.warp(block.timestamp + 7 days + 1);
-
-        // Anyone can cancel expired requests
-        vm.prank(user2);
-        gateway.cancelExpiredRequest(0);
-
-        // Refund goes to requester (user1), not caller (user2)
-        assertEq(user1.balance, userBalBefore + SEND_VALUE, "requester should get refund");
-        assertTrue(gateway.getPaymentRequest(0).fulfilled, "should be marked fulfilled");
-        assertEq(gateway.getPaymentRequest(0).amountEth, 0, "amountEth should be zeroed");
-    }
-
-    function test_cancelExpiredRequest_revertsTooSoon() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        // Only 6 days - not expired yet
-        vm.warp(block.timestamp + 6 days);
-
-        vm.prank(user2);
-        vm.expectRevert(BitcoinGateway.RequestNotStuck.selector);
-        gateway.cancelExpiredRequest(0);
-    }
-
-    function test_cancelExpiredRequest_revertsAlreadyFulfilled() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
-
-        vm.warp(block.timestamp + 8 days);
-
-        vm.prank(user2);
-        vm.expectRevert(BitcoinGateway.AlreadyFulfilled.selector);
-        gateway.cancelExpiredRequest(0);
-    }
-
-    function test_isRequestExpired() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        assertFalse(gateway.isRequestExpired(0), "should not be expired yet");
-
-        vm.warp(block.timestamp + 7 days + 1);
-        assertTrue(gateway.isRequestExpired(0), "should be expired after 7 days");
-    }
-
-    function test_isRequestExpired_falseAfterFulfill() public {
-        vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
-
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
-
-        vm.warp(block.timestamp + 8 days);
-        assertFalse(gateway.isRequestExpired(0), "fulfilled request should return false");
-    }
-
-    function test_getMaxRequestAge() public view {
-        assertEq(gateway.getMaxRequestAge(), 7 days, "max age should be 7 days");
-    }
-
-    // ══════════════════════════════════════════════════════════════════════════
-    // RELAYER MANAGEMENT TESTS
-    // ══════════════════════════════════════════════════════════════════════════
-
-    function test_registerRelayer_success() public {
-        vm.prank(user1);
-        gateway.registerRelayer(FINGERPRINT_1);
-
-        assertEq(gateway.fingerprintToRelayer(FINGERPRINT_1), user1, "fingerprint mapping wrong");
-        assertEq(gateway.relayerToFingerprint(user1), FINGERPRINT_1, "relayer mapping wrong");
-    }
-
-    function test_registerRelayer_revertsDuplicateFingerprint() public {
-        vm.prank(user1);
-        gateway.registerRelayer(FINGERPRINT_1);
+        gateway.registerUser(FINGERPRINT_1);
 
         vm.prank(user2);
         vm.expectRevert(BitcoinGateway.FingerprintAlreadyRegistered.selector);
-        gateway.registerRelayer(FINGERPRINT_1);
+        gateway.registerUser(FINGERPRINT_1);
     }
 
-    function test_registerRelayer_revertsAlreadyRegistered() public {
+    function test_registerUser_revertsAlreadyRegistered() public {
         vm.prank(user1);
-        gateway.registerRelayer(FINGERPRINT_1);
+        gateway.registerUser(FINGERPRINT_1);
 
         vm.prank(user1);
-        vm.expectRevert(BitcoinGateway.RelayerAlreadyRegistered.selector);
-        gateway.registerRelayer(FINGERPRINT_2);
+        vm.expectRevert(BitcoinGateway.UserAlreadyRegistered.selector);
+        gateway.registerUser(FINGERPRINT_2);
     }
 
-    function test_unregisterRelayer_success() public {
+    function test_unregisterUser_success() public {
         vm.prank(user1);
-        gateway.registerRelayer(FINGERPRINT_1);
+        gateway.registerUser(FINGERPRINT_1);
 
         vm.prank(user1);
-        gateway.unregisterRelayer();
+        gateway.unregisterUser();
 
-        assertEq(gateway.fingerprintToRelayer(FINGERPRINT_1), address(0), "fingerprint should be cleared");
-        assertEq(gateway.relayerToFingerprint(user1), bytes32(0), "relayer mapping should be cleared");
+        assertEq(gateway.fingerprintToUser(FINGERPRINT_1), address(0), "fingerprint should be cleared");
+        assertEq(gateway.userToFingerprint(user1), bytes32(0), "user mapping should be cleared");
     }
 
-    function test_unregisterRelayer_revertsNotRegistered() public {
+    function test_unregisterUser_revertsNotRegistered() public {
         vm.prank(user1);
-        vm.expectRevert(BitcoinGateway.RelayerNotRegistered.selector);
-        gateway.unregisterRelayer();
+        vm.expectRevert(BitcoinGateway.UserNotRegistered.selector);
+        gateway.unregisterUser();
     }
 
     function test_isFingerprintAvailable() public {
         assertTrue(gateway.isFingerprintAvailable(FINGERPRINT_1), "should be available");
 
         vm.prank(user1);
-        gateway.registerRelayer(FINGERPRINT_1);
+        gateway.registerUser(FINGERPRINT_1);
 
         assertFalse(gateway.isFingerprintAvailable(FINGERPRINT_1), "should not be available");
     }
 
-    function test_getRelayerByFingerprint() public {
-        assertEq(gateway.getRelayerByFingerprint(FINGERPRINT_1), address(0), "should be zero");
+    function test_getUserByFingerprint() public {
+        assertEq(gateway.getUserByFingerprint(FINGERPRINT_1), address(0), "should be zero");
 
         vm.prank(user1);
-        gateway.registerRelayer(FINGERPRINT_1);
+        gateway.registerUser(FINGERPRINT_1);
 
-        assertEq(gateway.getRelayerByFingerprint(FINGERPRINT_1), user1, "should be user1");
+        assertEq(gateway.getUserByFingerprint(FINGERPRINT_1), user1, "should be user1");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -639,22 +397,6 @@ contract BitcoinGatewayTest is Test {
         vm.prank(user1);
         vm.expectRevert(BitcoinGateway.NotOwner.selector);
         gateway.unpause();
-    }
-
-    function test_updateRelayer() public {
-        gateway.updateRelayer(user1);
-        assertEq(gateway.relayer(), user1, "relayer not updated");
-    }
-
-    function test_updateRelayer_revertsZero() public {
-        vm.expectRevert(BitcoinGateway.ZeroRelayer.selector);
-        gateway.updateRelayer(address(0));
-    }
-
-    function test_updateRelayer_revertsNotOwner() public {
-        vm.prank(user1);
-        vm.expectRevert(BitcoinGateway.NotOwner.selector);
-        gateway.updateRelayer(user2);
     }
 
     function test_transferOwnership() public {
@@ -711,12 +453,12 @@ contract BitcoinGatewayTest is Test {
     // ══════════════════════════════════════════════════════════════════════════
 
     function test_withdrawProtocolFees_success() public {
-        // Create and fulfill a request to generate fees
+        // Create and fulfill a request to generate fees (sendBitcoin is free)
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        vm.prank(registeredUser);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
 
         uint256 fees = gateway.totalProtocolFeesEth();
         assertGt(fees, 0, "should have fees");
@@ -730,10 +472,10 @@ contract BitcoinGatewayTest is Test {
 
     function test_withdrawProtocolFees_partial() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        vm.prank(registeredUser);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
 
         uint256 fees = gateway.totalProtocolFeesEth();
         uint256 halfFees = fees / 2;
@@ -764,7 +506,7 @@ contract BitcoinGatewayTest is Test {
 
     function test_getPaymentStatus_unfulfilled() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
         (bool fulfilled, bytes32 txid) = gateway.getPaymentStatus(0);
         assertFalse(fulfilled, "should not be fulfilled");
@@ -773,10 +515,10 @@ contract BitcoinGatewayTest is Test {
 
     function test_getPaymentStatus_fulfilled() public {
         vm.prank(user1);
-        gateway.sendBitcoin{value: SEND_VALUE}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        vm.prank(registeredUser);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
 
         (bool fulfilled, bytes32 txid) = gateway.getPaymentStatus(0);
         assertTrue(fulfilled, "should be fulfilled");
@@ -808,14 +550,14 @@ contract BitcoinGatewayTest is Test {
     }
 
     // ══════════════════════════════════════════════════════════════════════════
-    // RECEIVE ETH TEST
+    // PLAIN ETH REJECTION TEST (no receive() — only submitBitcoinProof accepts ETH)
     // ══════════════════════════════════════════════════════════════════════════
 
-    function test_receiveEth() public {
+    function test_plainEth_isRejected() public {
         vm.prank(user1);
         (bool success, ) = address(gateway).call{value: 1 ether}("");
-        assertTrue(success, "should accept ETH");
-        assertEq(address(gateway).balance, 1 ether, "balance mismatch");
+        assertFalse(success, "contract must not accept plain ETH transfers");
+        assertEq(address(gateway).balance, 0, "balance should remain zero");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -823,90 +565,89 @@ contract BitcoinGatewayTest is Test {
     // ══════════════════════════════════════════════════════════════════════════
 
     function test_e2e_fullLifecycle() public {
-        // 1. User sends a request
+        // 1. User registers a Bitcoin payment intent — completely free, no ETH locked
         vm.prank(user1);
-        uint256 id = gateway.sendBitcoin{value: 2 ether}(
+        uint256 id = gateway.sendBitcoin(
             "bc1qsender", "bc1qreceiver", 50000, "e2e test"
         );
 
         // 2. Verify request state
         (bool fulfilled, ) = gateway.getPaymentStatus(id);
         assertFalse(fulfilled, "should be pending");
+        assertEq(address(gateway).balance, 0, "no ETH should be locked");
 
-        // 3. Centralized relayer fulfills
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(id, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        // 3. Registered user fulfills on-chain after doing the BTC send;
+        //    user pays RELAY_FEE which goes entirely to the protocol treasury
+        vm.prank(registeredUser);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(id, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
 
         // 4. Verify fulfilled
         (fulfilled, ) = gateway.getPaymentStatus(id);
         assertTrue(fulfilled, "should be fulfilled");
 
-        // 5. Withdraw fees
+        // 5. Protocol has collected the full RELAY_FEE; withdraw to fee recipient
         uint256 fees = gateway.totalProtocolFeesEth();
-        uint256 expectedFee = (2 ether * 25) / 10_000; // 0.005 ether
-        assertEq(fees, expectedFee, "fee calc wrong");
+        assertEq(fees, RELAY_FEE, "protocol should have exactly RELAY_FEE");
 
         uint256 recipientBal = feeRecipient.balance;
         gateway.withdrawProtocolFees(fees);
-        assertEq(feeRecipient.balance, recipientBal + expectedFee, "recipient should get fees");
+        assertEq(feeRecipient.balance, recipientBal + RELAY_FEE, "fee recipient should get RELAY_FEE");
     }
 
-    function test_e2e_decentralizedRelayerFlow() public {
-        // 1. Register relayer
+    function test_e2e_registeredUserFlow() public {
+        // 1. Register new user (machine registration)
         vm.prank(user2);
-        gateway.registerRelayer(FINGERPRINT_1);
+        gateway.registerUser(FINGERPRINT_1);
 
-        // 2. User sends request
+        // 2. User registers payment intent — free, no ETH locked
         vm.prank(user1);
-        uint256 id = gateway.sendBitcoin{value: 10 ether}(
+        uint256 id = gateway.sendBitcoin(
             "bc1qfrom", "bc1qto", 200000, "decentralized"
         );
+        assertEq(address(gateway).balance, 0, "no ETH locked after sendBitcoin");
 
-        // 3. Registered relayer fulfills
-        uint256 relayerBal = user2.balance;
+        // 3. User submits proof after doing the BTC send; pays RELAY_FEE to protocol
+        uint256 userBalBefore = user2.balance;
         vm.prank(user2);
-        gateway.fulfillPaymentAsRelayer(id, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(id, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
 
-        // 4. Verify fee split
-        uint256 totalFee = (10 ether * 25) / 10_000; // 0.025 ether
-        uint256 relayerFee = (totalFee * 17) / 25;     // ~0.017 ether
-        uint256 protocolFee = totalFee - relayerFee;
+        // 4. Verify: full RELAY_FEE goes to protocol; user earns in BTC off-chain
+        assertEq(gateway.totalProtocolFeesEth(), RELAY_FEE, "protocol should receive full RELAY_FEE");
+        // User spent RELAY_FEE + gas (balance decreased, not increased)
+        assertLt(user2.balance, userBalBefore, "user balance should decrease by fee");
 
-        assertEq(user2.balance, relayerBal + relayerFee, "relayer fee wrong");
-        assertEq(gateway.totalProtocolFeesEth(), protocolFee, "protocol fee wrong");
-
-        // 5. Relayer unregisters
+        // 5. User unregisters their machine
         vm.prank(user2);
-        gateway.unregisterRelayer();
+        gateway.unregisterUser();
         assertTrue(gateway.isFingerprintAvailable(FINGERPRINT_1), "fingerprint should be free");
     }
 
     function test_e2e_pauseBlocksEverything() public {
-        // Create a request first
+        // Create a request first (free — no ETH needed)
         vm.prank(user1);
-        gateway.sendBitcoin{value: 1 ether}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
         // Pause
         gateway.pause();
 
-        // All operations should fail
+        // All operations should fail while paused
         vm.prank(user1);
         vm.expectRevert(BitcoinGateway.ContractPaused.selector);
-        gateway.sendBitcoin{value: 1 ether}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
-        vm.prank(relayerAddr);
+        vm.prank(registeredUser);
         vm.expectRevert(BitcoinGateway.ContractPaused.selector);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
 
         vm.prank(user2);
         vm.expectRevert(BitcoinGateway.ContractPaused.selector);
-        gateway.registerRelayer(FINGERPRINT_1);
+        gateway.registerUser(FINGERPRINT_1);
 
         // Unpause and verify recovery
         gateway.unpause();
 
-        vm.prank(relayerAddr);
-        gateway.fulfillPayment(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
+        vm.prank(registeredUser);
+        gateway.submitBitcoinProof{value: RELAY_FEE}(0, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
         assertTrue(gateway.getPaymentRequest(0).fulfilled, "should work after unpause");
     }
 
@@ -916,68 +657,19 @@ contract BitcoinGatewayTest is Test {
 
         vm.prank(user1);
         vm.expectRevert(BitcoinGateway.AddressBlacklisted.selector);
-        gateway.sendBitcoin{value: 1 ether}("a", "b", SATS, "");
+        gateway.sendBitcoin("a", "b", SATS, "");
 
         // Un-blacklist
         gateway.setBlacklisted(user1, false);
 
         vm.prank(user1);
-        uint256 id = gateway.sendBitcoin{value: 1 ether}("a", "b", SATS, "");
+        uint256 id = gateway.sendBitcoin("a", "b", SATS, "");
         assertEq(id, 0, "should work after un-blacklist");
     }
 
     // ══════════════════════════════════════════════════════════════════════════
     // NO-OP IDEMPOTENCY TESTS
     // ══════════════════════════════════════════════════════════════════════════
-
-    function test_e2e_cancelRefundFlow() public {
-        // 1. User deposits 5 ETH
-        vm.prank(user1);
-        uint256 id = gateway.sendBitcoin{value: 5 ether}("a", "b", SATS, "cancel test");
-
-        uint256 contractBal = address(gateway).balance;
-        assertEq(contractBal, 5 ether, "contract should hold deposit");
-
-        // 2. Wait 25 hours
-        vm.warp(block.timestamp + 25 hours);
-
-        // 3. Cancel and get refund
-        uint256 userBalBefore = user1.balance;
-        vm.prank(user1);
-        gateway.cancelStuckRequest(id);
-
-        // 4. Verify refund
-        assertEq(user1.balance, userBalBefore + 5 ether, "user should get 5 ETH back");
-        assertEq(address(gateway).balance, 0, "contract should be empty");
-        assertTrue(gateway.getPaymentRequest(id).fulfilled, "should be marked fulfilled");
-
-        // 5. Cannot fulfill after cancel
-        vm.prank(relayerAddr);
-        vm.expectRevert(BitcoinGateway.AlreadyFulfilled.selector);
-        gateway.fulfillPayment(id, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
-    }
-
-    function test_e2e_expirationFlow() public {
-        // 1. User deposits
-        vm.prank(user1);
-        uint256 id = gateway.sendBitcoin{value: 3 ether}("a", "b", SATS, "expire test");
-
-        // 2. Relayer can't fulfill after 7 days
-        vm.warp(block.timestamp + 7 days + 1);
-
-        vm.prank(relayerAddr);
-        vm.expectRevert(BitcoinGateway.RequestExpired.selector);
-        gateway.fulfillPayment(id, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
-
-        // 3. Anyone can trigger refund
-        uint256 userBalBefore = user1.balance;
-        vm.prank(user3);
-        gateway.cancelExpiredRequest(id);
-
-        // 4. Requester (user1) gets refund, not caller (user3)
-        assertEq(user1.balance, userBalBefore + 3 ether, "requester should get refund");
-        assertTrue(gateway.getPaymentRequest(id).fulfilled, "should be marked fulfilled");
-    }
 
     function test_pause_idempotent() public {
         gateway.pause();
@@ -990,11 +682,6 @@ contract BitcoinGatewayTest is Test {
         assertFalse(gateway.paused());
     }
 
-    function test_updateRelayer_sameValue() public {
-        gateway.updateRelayer(relayerAddr); // Same value, should not revert
-        assertEq(gateway.relayer(), relayerAddr);
-    }
-
     function test_setBlacklisted_sameValue() public {
         gateway.setBlacklisted(user1, false); // Already false, should not revert
     }
@@ -1002,4 +689,3 @@ contract BitcoinGatewayTest is Test {
     // Allow this contract to receive ETH (for fee withdrawal)
     receive() external payable {}
 }
-
