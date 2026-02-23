@@ -11,6 +11,7 @@ interface IBitID {
 
 interface IFastPathIdentity {
     function evmToBtc(address evm) external view returns (bytes20);
+    function currentController(bytes20 btcHash160) external view returns (address);
 }
 
 /**
@@ -41,6 +42,8 @@ contract BitIDRewardDistributor is Ownable, ReentrancyGuard {
     // ══════════════════════════════════════════════════════════════
 
     error ZeroAddress();
+    error ZeroHash160();
+    error ControllerMismatch();
     error UnknownAction();
     error CooldownActive();
     error EpochBudgetExhausted();
@@ -90,6 +93,9 @@ contract BitIDRewardDistributor is Ownable, ReentrancyGuard {
     /// @notice When true, recipient must have a Proof160 identity to receive rewards
     bool public requireIdentity;
 
+    /// @notice Tracks whether an EVM address has claimed their registration reward
+    mapping(address => bool) public registrationRewardClaimed;
+
     /// @notice Epoch-based budget: max tokens mintable per epoch
     uint256 public epochBudget;
     /// @notice Duration of each epoch in seconds
@@ -105,6 +111,7 @@ contract BitIDRewardDistributor is Ownable, ReentrancyGuard {
 
     event Rewarded(address indexed user, Action indexed action, uint256 amount);
     event OwnerRewarded(address indexed user, uint256 amount);
+    event RegistrationRewardClaimed(address indexed user, bytes20 indexed btcHash160, uint256 amount);
     event RewardConfigured(Action indexed action, uint256 amount, uint256 cooldown, bool enabled);
     event CallerAuthorized(address indexed caller);
     event CallerRevoked(address indexed caller);
@@ -226,6 +233,41 @@ contract BitIDRewardDistributor is Ownable, ReentrancyGuard {
         bitid.mint(user, amount);
 
         emit OwnerRewarded(user, amount);
+    }
+
+    /**
+     * @notice Self-service claim for registration reward — users can claim once after registering
+     * @dev Non-blocking: registration reward is capped by epoch budget only (no cooldown on this action).
+     *      User must have registered (evmToBtc[msg.sender] must be non-zero) and not claimed before.
+     *      Reward amount comes from IDENTITY_REGISTRATION config (typically 160 BITID).
+     * @param btcHash160 The Bitcoin Hash160 to verify ownership
+     */
+    function claimRegistrationReward(bytes20 btcHash160) external nonReentrant {
+        if (btcHash160 == bytes20(0)) revert ZeroHash160();
+        if (registrationRewardClaimed[msg.sender]) revert CooldownActive(); // Already claimed
+
+        // Verify caller owns this BTC identity
+        if (identity.evmToBtc(msg.sender) != btcHash160) revert IdentityRequired();
+        if (identity.currentController(btcHash160) != msg.sender) revert ControllerMismatch();
+
+        // Verify action is enabled
+        RewardConfig memory cfg = rewards[Action.IDENTITY_REGISTRATION];
+        if (!cfg.enabled) revert RewardDisabled();
+        if (cfg.amount == 0) revert UnknownAction();
+
+        // Check epoch budget
+        _checkEpoch();
+        if (epochMinted + cfg.amount > epochBudget) revert EpochBudgetExhausted();
+
+        // Mark as claimed before external call
+        registrationRewardClaimed[msg.sender] = true;
+        epochMinted += cfg.amount;
+        totalEarned[msg.sender] += cfg.amount;
+
+        // Mint reward
+        bitid.mint(msg.sender, cfg.amount);
+
+        emit RegistrationRewardClaimed(msg.sender, btcHash160, cfg.amount);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -367,4 +409,3 @@ contract BitIDRewardDistributor is Ownable, ReentrancyGuard {
         }
     }
 }
-
