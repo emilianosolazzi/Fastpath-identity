@@ -59,6 +59,38 @@ contract GasBombReceiver {
     }
 }
 
+/// @dev NFT that reverts in hasDiscount — tests try/catch protection
+contract MaliciousDiscountNFT is IDiscountNFT {
+    function hasDiscount(address) external pure returns (bool) {
+        revert("malicious NFT");
+    }
+}
+
+contract PayableReceiver {
+    receive() external payable {}
+}
+
+contract ReentrantReceiver {
+    FastPathIdentity public identity;
+    bytes20 public hash;
+    bool public reentered;
+
+    constructor(FastPathIdentity _identity, bytes20 _hash) {
+        identity = _identity;
+        hash = _hash;
+    }
+
+    receive() external payable {
+        if (!reentered && address(this).balance >= 1) {
+            try identity.receiveFunds{value: 1}(hash) {
+                // no-op
+            } catch {
+                reentered = true;
+            }
+        }
+    }
+}
+
 contract FastPathIdentityHarness is FastPathIdentity {
     constructor() FastPathIdentity(0) {}
 
@@ -198,6 +230,60 @@ contract FastPathIdentityFullTest is Test {
         assertEq(identity.evmToBtc(signer), expected, "mapping not set v1 btc style");
     }
 
+    /// @notice V1 registration with 33-byte compressed pubkey should succeed
+    function testRegisterV1_Succeeds_CompressedPubkey() public {
+        address signer = vm.addr(PRIVKEY);
+        bytes memory message = bytes(_toHex(signer));
+        bytes32 digest = _ethSignedMessageHash(message);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(PRIVKEY, digest);
+        bytes memory sig = abi.encodePacked(r, s, bytes1(v));
+
+        bytes memory pubkeyComp = abi.encodePacked(bytes1(PUBKEY_PREFIX), PUBKEY_X);
+
+        vm.deal(signer, 1 ether);
+        vm.prank(signer);
+        identity.registerBitcoinAddress{value: 0.001 ether}(pubkeyComp, sig, message);
+
+        bytes20 expectedHash = _btcHash160FromPubkeyMem(pubkeyComp);
+        assertEq(identity.evmToBtc(signer), expectedHash, "mapping not set v1 compressed");
+    }
+
+    /// @notice Overpaying (msg.value > fee) should succeed — excess stays in accumulatedFees
+    function testRegisterV2_ExcessFeeAccepted() public {
+        address signer = vm.addr(PRIVKEY);
+        bytes memory message = bytes(_toHex(signer));
+        bytes32 digest = _ethSignedMessageHash(message);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(PRIVKEY, digest);
+
+        vm.deal(signer, 2 ether);
+        vm.prank(signer);
+        // Pay 0.5 ether for a 0.001 ether fee — should not revert
+        identity.registerBitcoinAddressV2{value: 0.5 ether}(PUBKEY_PREFIX, PUBKEY_X, r, s, v, false);
+
+        // Full msg.value goes to accumulatedFees
+        assertEq(identity.accumulatedFees(), 0.5 ether, "excess fee not accumulated");
+    }
+
+    /// @notice V1 message of exactly 42 bytes ("0x" + 40 hex) should succeed — boundary test
+    function testRegisterV1_MessageBoundary_42bytes() public {
+        address signer = vm.addr(PRIVKEY);
+        // _toHex produces exactly 42 bytes: "0x" + 40 hex chars for 20-byte address
+        bytes memory message = bytes(_toHex(signer));
+        assertEq(message.length, 42, "message should be exactly 42 bytes");
+
+        bytes32 digest = _ethSignedMessageHash(message);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(PRIVKEY, digest);
+        bytes memory sig = abi.encodePacked(r, s, bytes1(v));
+
+        vm.deal(signer, 1 ether);
+        vm.prank(signer);
+        // Should succeed — 42 is within the <= 42 bound
+        identity.registerBitcoinAddress{value: 0.001 ether}(PUBKEY_UNCOMP, sig, message);
+
+        bytes20 expectedHash = _btcHash160FromPubkeyMem(PUBKEY_UNCOMP);
+        assertEq(identity.evmToBtc(signer), expectedHash, "42-byte message registration failed");
+    }
+
     function testRegisterV2_InsufficientFee() public {
         address signer = vm.addr(PRIVKEY);
         bytes memory message = bytes(_toHex(signer));
@@ -299,6 +385,47 @@ contract FastPathIdentityFullTest is Test {
         vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NotOwner.selector));
         identity.setDiscountNFT(address(nft));
     }
+
+    /// @notice Malicious NFT that reverts in hasDiscount must not brick registration (try/catch)
+    function testDiscountNFT_MaliciousReverts_DoesNotBrickRegistration() public {
+        MaliciousDiscountNFT badNft = new MaliciousDiscountNFT();
+        vm.prank(owner);
+        identity.setDiscountNFT(address(badNft));
+
+        address signer = vm.addr(PRIVKEY);
+        bytes memory message = bytes(_toHex(signer));
+        bytes32 digest = _ethSignedMessageHash(message);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(PRIVKEY, digest);
+
+        vm.deal(signer, 1 ether);
+        vm.prank(signer);
+        // Full fee required — try/catch swallows the revert, no discount applied
+        identity.registerBitcoinAddressV2{value: 0.001 ether}(PUBKEY_PREFIX, PUBKEY_X, r, s, v, false);
+
+        bytes memory pubkeyComp = abi.encodePacked(bytes1(PUBKEY_PREFIX), PUBKEY_X);
+        bytes20 expectedHash = _btcHash160FromPubkeyMem(pubkeyComp);
+        assertEq(identity.evmToBtc(signer), expectedHash, "registration should succeed despite malicious NFT");
+    }
+
+    /// @notice NFT returns false → no discount → full fee required
+    function testDiscountNFT_NoDiscount_FullFeeRequired() public {
+        MockDiscountNFT nft = new MockDiscountNFT();
+        vm.prank(owner);
+        identity.setDiscountNFT(address(nft));
+
+        address signer = vm.addr(PRIVKEY);
+        // nft.discount[signer] defaults to false — no discount
+
+        bytes memory message = bytes(_toHex(signer));
+        bytes32 digest = _ethSignedMessageHash(message);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(PRIVKEY, digest);
+
+        vm.deal(signer, 1 ether);
+        vm.prank(signer);
+        // 90% of 0.001 = 0.0009 should be insufficient when no discount
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.InsufficientFee.selector));
+        identity.registerBitcoinAddressV2{value: 0.0009 ether}(PUBKEY_PREFIX, PUBKEY_X, r, s, v, false);
+    }
     
     function testSetRegistrationFee() public {
         vm.prank(owner);
@@ -311,9 +438,16 @@ contract FastPathIdentityFullTest is Test {
         vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NotOwner.selector));
         identity.setRegistrationFee(0.002 ether);
     }
+
+    function testSetRegistrationFee_FeeTooHigh() public {
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.FeeTooHigh.selector));
+        identity.setRegistrationFee(1.1 ether);
+    }
     
     function testWithdrawFees() public {
-        // Send some fees to contract
+        // Set accumulatedFees (slot 13) and deal matching ETH to contract
+        vm.store(address(identity), bytes32(uint256(13)), bytes32(uint256(1 ether)));
         vm.deal(address(identity), 1 ether);
         uint256 ownerBalBefore = owner.balance;
         
@@ -321,7 +455,7 @@ contract FastPathIdentityFullTest is Test {
         identity.withdrawFees();
         
         assertTrue(owner.balance == ownerBalBefore + 1 ether, "fees not withdrawn");
-        assertTrue(address(identity).balance == 0, "contract not empty");
+        assertEq(identity.accumulatedFees(), 0, "accumulatedFees not cleared");
     }
     
     function testWithdrawFees_OnlyOwner() public {
@@ -336,14 +470,68 @@ contract FastPathIdentityFullTest is Test {
         identity.withdrawFees();
     }
 
+    function testWithdrawFees_AccumulatesFromBothV1AndV2() public {
+        // Register via V2 to accumulate fees
+        address signer1 = vm.addr(PRIVKEY);
+        bytes memory message1 = bytes(_toHex(signer1));
+        bytes32 digest1 = _ethSignedMessageHash(message1);
+        (uint8 v1, bytes32 r1, bytes32 s1) = vm.sign(PRIVKEY, digest1);
+
+        vm.deal(signer1, 1 ether);
+        vm.prank(signer1);
+        identity.registerBitcoinAddressV2{value: 0.001 ether}(PUBKEY_PREFIX, PUBKEY_X, r1, s1, v1, false);
+
+        // Verify fees accumulated
+        assertEq(identity.accumulatedFees(), 0.001 ether, "V2 fee not accumulated");
+
+        // Owner withdraws
+        uint256 ownerBalBefore = owner.balance;
+        vm.prank(owner);
+        identity.withdrawFees();
+
+        assertEq(owner.balance, ownerBalBefore + 0.001 ether, "owner should receive V2 fee");
+        assertEq(identity.accumulatedFees(), 0, "accumulatedFees should be zero");
+    }
+
+    /// @notice After withdraw succeeds, second call reverts with NoFeesToWithdraw
+    function testWithdrawFees_ClearsToZero_ThenReverts() public {
+        // Register to accumulate fees
+        address signer = vm.addr(PRIVKEY);
+        bytes memory message = bytes(_toHex(signer));
+        bytes32 digest = _ethSignedMessageHash(message);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(PRIVKEY, digest);
+
+        vm.deal(signer, 1 ether);
+        vm.prank(signer);
+        identity.registerBitcoinAddressV2{value: 0.001 ether}(PUBKEY_PREFIX, PUBKEY_X, r, s, v, false);
+
+        // First withdraw succeeds
+        vm.prank(owner);
+        identity.withdrawFees();
+        assertEq(identity.accumulatedFees(), 0, "fees should be zero after withdraw");
+
+        // Second withdraw reverts
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NoFeesToWithdraw.selector));
+        identity.withdrawFees();
+    }
+
     // ==========================================
     // TRANSFER OWNERSHIP TESTS
     // ==========================================
 
-    function testTransferOwnership_Succeeds() public {
+    function testTransferOwnership_TwoStep() public {
         address newOwner = address(0x0000000000000000000000000000000000000aBc);
         vm.prank(owner);
         identity.transferOwnership(newOwner);
+
+        // Owner not changed yet (two-step)
+        assertEq(identity.owner(), owner, "owner should not change yet");
+        assertEq(identity.pendingOwner(), newOwner, "pendingOwner not set");
+
+        // New owner accepts
+        vm.prank(newOwner);
+        identity.acceptOwnership();
         assertEq(identity.owner(), newOwner, "ownership not transferred");
     }
 
@@ -355,14 +543,55 @@ contract FastPathIdentityFullTest is Test {
 
     function testTransferOwnership_ZeroAddress() public {
         vm.prank(owner);
-        vm.expectRevert("Zero address");
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.ZeroAddress.selector));
         identity.transferOwnership(address(0));
+    }
+
+    function testAcceptOwnership_NotPendingOwner() public {
+        address newOwner = address(0x0000000000000000000000000000000000000aBc);
+        vm.prank(owner);
+        identity.transferOwnership(newOwner);
+
+        // Random address tries to accept — should fail
+        vm.prank(address(0x0000000000000000000000000000000000000Bad));
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NotPendingOwner.selector));
+        identity.acceptOwnership();
+
+        // Owner unchanged
+        assertEq(identity.owner(), owner, "owner should not change");
+    }
+
+    /// @notice Second transferOwnership overwrites the pending owner
+    function testTransferOwnership_OverwritesPendingOwner() public {
+        address first = address(0x0000000000000000000000000000000000000aBc);
+        address second = address(0x0000000000000000000000000000000000000deF);
+
+        vm.prank(owner);
+        identity.transferOwnership(first);
+        assertEq(identity.pendingOwner(), first, "first pending not set");
+
+        vm.prank(owner);
+        identity.transferOwnership(second);
+        assertEq(identity.pendingOwner(), second, "second pending not set");
+
+        // First can no longer accept
+        vm.prank(first);
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NotPendingOwner.selector));
+        identity.acceptOwnership();
+
+        // Second can accept
+        vm.prank(second);
+        identity.acceptOwnership();
+        assertEq(identity.owner(), second, "second should be owner");
     }
 
     function testTransferOwnership_NewOwnerCanAct() public {
         address newOwner = address(0x0000000000000000000000000000000000000aBc);
         vm.prank(owner);
         identity.transferOwnership(newOwner);
+
+        vm.prank(newOwner);
+        identity.acceptOwnership();
 
         // Old owner can no longer act
         vm.prank(owner);
@@ -570,14 +799,12 @@ contract FastPathIdentityFullTest is Test {
         vm.prank(newEvm);
         identity.setReceivePreference(FastPathIdentity.ReceivePreference.ViaHash160);
 
-        uint256 oldBal = oldEvm.balance;
-        uint256 newBal = newEvm.balance;
-
         vm.deal(address(this), 1 ether);
         identity.receiveFunds{value: 1}(expected);
 
-        assertEq(oldEvm.balance, oldBal, "old EVM should not receive funds");
-        assertEq(newEvm.balance, newBal + 1, "new EVM should receive funds");
+        // Funds credited to newEvm's pendingWithdrawals, not oldEvm
+        assertEq(identity.pendingWithdrawals(oldEvm), 0, "old EVM should not have pending funds");
+        assertEq(identity.pendingWithdrawals(newEvm), 1, "new EVM should have pending funds");
     }
 
     function testInitiateRelink_CooldownActive() public {
@@ -807,6 +1034,28 @@ contract FastPathIdentityFullTest is Test {
         vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.PendingRelinkMissing.selector));
         identity.cancelRelink(expected);
     }
+
+    function testCancelRelink_Succeeds() public {
+        bytes20 expected = bytes20(keccak256("cancel-hash"));
+        address currentOwner = address(0x0000000000000000000000000000000000000001);
+        address pendingNewEvm = vm.addr(2);
+
+        // _setBtcToEvm sets both btcToEvm (slot 6) AND activeEvm (slot 11).
+        // cancelRelink checks activeEvm, so both must be set.
+        _setBtcToEvm(expected, currentOwner);
+        _setPendingRelink(expected, pendingNewEvm, block.timestamp + 1000, true);
+
+        // Verify pending exists
+        (bool hasPending,,,) = identity.getRelinkStatus(expected);
+        assertTrue(hasPending, "pending should exist before cancel");
+
+        vm.prank(currentOwner);
+        identity.cancelRelink(expected);
+
+        // Verify pending cleared
+        (bool hasPendingAfter,,,) = identity.getRelinkStatus(expected);
+        assertTrue(!hasPendingAfter, "pending should be cleared after cancel");
+    }
     
     // NOTE: Full relink flow requires valid BTC signatures, omitted for now
     // Coverage will still be low until registration tests with valid signatures are added
@@ -819,6 +1068,74 @@ contract FastPathIdentityFullTest is Test {
         vm.prank(owner);
         identity.emergencyDisableRelink(true);
         assertTrue(identity.emergencyStop(), "emergency not activated");
+    }
+
+    function testEmergencyStop_BlocksInitiateRelink() public {
+        vm.prank(owner);
+        identity.setRelinkEnabled(true);
+        vm.prank(owner);
+        identity.emergencyDisableRelink(true);
+
+        bytes memory pubkey = abi.encodePacked(bytes1(PUBKEY_PREFIX), PUBKEY_X);
+        bytes memory sig = new bytes(65);
+        vm.expectRevert("Emergency stop active");
+        identity.initiateRelink(hash160, address(0x0000000000000000000000000000000000000002), pubkey, sig);
+    }
+
+    function testEmergencyStop_BlocksFinalizeRelink() public {
+        bytes20 expected = bytes20(keccak256("emergency-finalize"));
+        address newEvm = vm.addr(2);
+        _setBtcToEvm(expected, address(0x0000000000000000000000000000000000000001));
+        _setPendingRelink(expected, newEvm, block.timestamp - 1, true);
+
+        vm.prank(owner);
+        identity.emergencyDisableRelink(true);
+
+        vm.prank(newEvm);
+        vm.expectRevert("Emergency stop active");
+        identity.finalizeRelink(expected);
+    }
+
+    function testEmergencyStop_BlocksCancelRelink() public {
+        bytes20 expected = bytes20(keccak256("emergency-cancel"));
+        address currentOwner = address(0x0000000000000000000000000000000000000001);
+        _setBtcToEvm(expected, currentOwner);
+        _setPendingRelink(expected, vm.addr(2), block.timestamp + 1000, true);
+
+        vm.prank(owner);
+        identity.emergencyDisableRelink(true);
+
+        vm.prank(currentOwner);
+        vm.expectRevert("Emergency stop active");
+        identity.cancelRelink(expected);
+    }
+
+    /// @notice Emergency can be disabled, and then relink operations resume
+    function testEmergencyStop_CanBeDisabled() public {
+        vm.prank(owner);
+        identity.setRelinkEnabled(true);
+
+        // Enable emergency
+        vm.prank(owner);
+        identity.emergencyDisableRelink(true);
+        assertTrue(identity.emergencyStop(), "emergency should be active");
+
+        // Disable emergency
+        vm.prank(owner);
+        identity.emergencyDisableRelink(false);
+        assertTrue(!identity.emergencyStop(), "emergency should be disabled");
+
+        // Now relink operations should proceed — test that cancelRelink can be called
+        bytes20 expected = bytes20(keccak256("emergency-resume"));
+        address currentOwner = address(0x0000000000000000000000000000000000000001);
+        _setBtcToEvm(expected, currentOwner);
+        _setPendingRelink(expected, vm.addr(2), block.timestamp + 1000, true);
+
+        vm.prank(currentOwner);
+        identity.cancelRelink(expected); // should not revert
+
+        (bool hasPending,,,) = identity.getRelinkStatus(expected);
+        assertTrue(!hasPending, "cancel should succeed after emergency disabled");
     }
 
     // ==========================================
@@ -1102,31 +1419,30 @@ contract FastPathIdentityFullTest is Test {
     }
 
     // ==========================================
-    // SECURITY: GAS-CAPPED RECEIVEFUNDS
+    // SECURITY: PULL-PAYMENT SECURITY
     // ==========================================
 
-    /// @notice receiveFunds must fail when receiver's receive() exceeds 2300 gas stipend
-    function testReceiveFunds_GasBombReceiver_Fails() public {
-        // Deploy malicious receiver that does a storage write in receive()
+    /// @notice With pull-payment, receiveFunds credits pendingWithdrawals — gas bomb is irrelevant
+    function testReceiveFunds_GasBombReceiver_PullPayment() public {
         GasBombReceiver bomb = new GasBombReceiver();
         address bombAddr = address(bomb);
 
-        // Register the gas-bomb contract as the active controller for a hash160
         bytes20 testHash = bytes20(keccak256("gas-bomb-test"));
         _setBtcToEvm(testHash, bombAddr);
 
-        // Set receive preference to ViaHash160
         vm.prank(bombAddr);
         identity.setReceivePreference(FastPathIdentity.ReceivePreference.ViaHash160);
 
-        // receiveFunds should revert because the receiver's storage write exceeds 2300 gas
+        // receiveFunds credits pendingWithdrawals without sending ETH
         vm.deal(address(this), 1 ether);
-        vm.expectRevert("ETH transfer failed");
         identity.receiveFunds{value: 1 ether}(testHash);
+
+        assertEq(identity.pendingWithdrawals(bombAddr), 1 ether, "pending balance should be credited");
+        assertEq(bombAddr.balance, 0, "no ETH should be pushed");
     }
 
-    /// @notice receiveFunds to EOA receiver should still work with 2300 gas cap
-    function testReceiveFunds_EOA_Succeeds() public {
+    /// @notice receiveFunds credits pendingWithdrawals; EOA withdraws via withdrawPendingFunds
+    function testReceiveFunds_EOA_PullPayment() public {
         address eoaReceiver = address(0x000000000000000000000000000000000000ABC0);
 
         bytes20 testHash = bytes20(keccak256("eoa-receiver-test"));
@@ -1135,11 +1451,233 @@ contract FastPathIdentityFullTest is Test {
         vm.prank(eoaReceiver);
         identity.setReceivePreference(FastPathIdentity.ReceivePreference.ViaHash160);
 
-        uint256 balBefore = eoaReceiver.balance;
         vm.deal(address(this), 1 ether);
         identity.receiveFunds{value: 0.5 ether}(testHash);
 
-        assertEq(eoaReceiver.balance, balBefore + 0.5 ether, "EOA should receive funds with gas-capped call");
+        // Funds credited, not sent
+        assertEq(identity.pendingWithdrawals(eoaReceiver), 0.5 ether, "pending balance wrong");
+
+        // EOA pulls funds
+        uint256 balBefore = eoaReceiver.balance;
+        vm.prank(eoaReceiver);
+        identity.withdrawPendingFunds();
+
+        assertEq(eoaReceiver.balance, balBefore + 0.5 ether, "EOA should receive funds after withdraw");
+        assertEq(identity.pendingWithdrawals(eoaReceiver), 0, "pending should be cleared");
+    }
+
+    // ==========================================
+    // PULL-PAYMENT TESTS
+    // ==========================================
+
+    function testWithdrawPendingFunds_CorrectAmount() public {
+        PayableReceiver receiver = new PayableReceiver();
+        address receiverAddr = address(receiver);
+
+        bytes20 testHash = bytes20(keccak256("pull-payment-test"));
+        _setBtcToEvm(testHash, receiverAddr);
+
+        vm.prank(receiverAddr);
+        identity.setReceivePreference(FastPathIdentity.ReceivePreference.ViaHash160);
+
+        vm.deal(address(this), 1 ether);
+        identity.receiveFunds{value: 1 ether}(testHash);
+
+        // Balance not moved yet
+        assertTrue(receiverAddr.balance == 0, "should not push ETH");
+        assertTrue(identity.pendingWithdrawals(receiverAddr) == 1 ether, "pending balance wrong");
+
+        // Receiver pulls
+        vm.prank(receiverAddr);
+        identity.withdrawPendingFunds();
+
+        assertTrue(receiverAddr.balance == 1 ether, "withdraw failed");
+        assertTrue(identity.pendingWithdrawals(receiverAddr) == 0, "pending balance not cleared");
+    }
+
+    function testWithdrawPendingFunds_ReentrancyBlocked() public {
+        bytes20 testHash = bytes20(keccak256("reentrancy-withdraw-test"));
+        ReentrantReceiver receiver = new ReentrantReceiver(identity, testHash);
+        address receiverAddr = address(receiver);
+
+        _setBtcToEvm(testHash, receiverAddr);
+
+        vm.prank(receiverAddr);
+        identity.setReceivePreference(FastPathIdentity.ReceivePreference.ViaHash160);
+
+        vm.deal(address(this), 1 ether);
+        identity.receiveFunds{value: 1 ether}(testHash);
+
+        vm.prank(receiverAddr);
+        // Reentrancy attempt from receive() should hit the nonReentrant lock
+        identity.withdrawPendingFunds();
+        assertTrue(receiver.reentered(), "reentrancy should be blocked");
+    }
+
+    function testWithdrawPendingFunds_NothingToWithdraw() public {
+        vm.expectRevert(bytes("No pending funds"));
+        identity.withdrawPendingFunds();
+    }
+
+    function testAccumulatedFees_SeparateFromUserDeposits() public {
+        PayableReceiver receiver = new PayableReceiver();
+        address receiverAddr = address(receiver);
+
+        bytes20 testHash = bytes20(keccak256("fee-separation-test"));
+        _setBtcToEvm(testHash, receiverAddr);
+
+        vm.prank(receiverAddr);
+        identity.setReceivePreference(FastPathIdentity.ReceivePreference.ViaHash160);
+
+        vm.deal(address(this), 2 ether);
+        identity.receiveFunds{value: 1 ether}(testHash);
+
+        // Owner cannot drain user deposits via withdrawFees
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NoFeesToWithdraw.selector));
+        identity.withdrawFees(); // should revert — no registration fees accumulated
+
+        // User deposit untouched
+        assertTrue(identity.pendingWithdrawals(receiverAddr) == 1 ether,
+            "user deposit should be safe");
+    }
+
+    function testWithdrawPendingFunds_MultipleDeposits() public {
+        PayableReceiver receiver = new PayableReceiver();
+        address receiverAddr = address(receiver);
+
+        bytes20 testHash = bytes20(keccak256("multi-deposit-test"));
+        _setBtcToEvm(testHash, receiverAddr);
+
+        vm.prank(receiverAddr);
+        identity.setReceivePreference(FastPathIdentity.ReceivePreference.ViaHash160);
+
+        // Multiple deposits accumulate
+        vm.deal(address(this), 3 ether);
+        identity.receiveFunds{value: 1 ether}(testHash);
+        identity.receiveFunds{value: 0.5 ether}(testHash);
+        identity.receiveFunds{value: 0.25 ether}(testHash);
+
+        assertEq(identity.pendingWithdrawals(receiverAddr), 1.75 ether, "accumulated pending wrong");
+
+        // Single withdrawal gets all
+        vm.prank(receiverAddr);
+        identity.withdrawPendingFunds();
+
+        assertEq(receiverAddr.balance, 1.75 ether, "withdraw total wrong");
+        assertEq(identity.pendingWithdrawals(receiverAddr), 0, "pending not cleared");
+    }
+
+    // ==========================================
+    // RELINK INVARIANT TESTS
+    // ==========================================
+
+    /// @notice btcToEvm is IMMUTABLE — after relink it must still point to the original registrant
+    function testRelink_BtcToEvmNeverChanges() public {
+        vm.prank(owner);
+        identity.setRelinkEnabled(true);
+
+        address oldEvm = vm.addr(PRIVKEY);
+        address newEvm = vm.addr(2);
+
+        _registerWithPrivkey(oldEvm);
+        bytes20 expected = _expectedHash160();
+
+        // Before relink
+        assertEq(identity.btcToEvm(expected), oldEvm, "btcToEvm should be oldEvm before relink");
+
+        vm.warp(3 days + 1);
+        bytes memory sig = _signForEvm(newEvm);
+        vm.prank(newEvm);
+        identity.initiateRelink(expected, newEvm, _pubkeyComp(), sig);
+
+        vm.warp(block.timestamp + 3 days + 1);
+        vm.prank(newEvm);
+        identity.finalizeRelink(expected);
+
+        // After relink — btcToEvm MUST still point to original registrant
+        assertEq(identity.btcToEvm(expected), oldEvm, "btcToEvm must NEVER change after relink");
+        // But currentController should be newEvm
+        assertEq(identity.currentController(expected), newEvm, "controller should be newEvm");
+    }
+
+    /// @notice After finalizing a relink, immediately initiating another should hit CooldownActive
+    function testRelinkCooldown_EnforcedBetweenFinalizations() public {
+        vm.prank(owner);
+        identity.setRelinkEnabled(true);
+
+        address oldEvm = vm.addr(PRIVKEY);
+        address newEvm = vm.addr(2);
+
+        _registerWithPrivkey(oldEvm);
+        bytes20 expected = _expectedHash160();
+
+        vm.warp(3 days + 1);
+        bytes memory sig = _signForEvm(newEvm);
+        vm.prank(newEvm);
+        identity.initiateRelink(expected, newEvm, _pubkeyComp(), sig);
+
+        vm.warp(block.timestamp + 3 days + 1);
+        vm.prank(newEvm);
+        identity.finalizeRelink(expected);
+
+        // Immediately try to initiate another relink — should fail with CooldownActive
+        address thirdEvm = vm.addr(3);
+        bytes memory sig2 = _signForEvm(thirdEvm);
+        vm.prank(thirdEvm);
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.CooldownActive.selector));
+        identity.initiateRelink(expected, thirdEvm, _pubkeyComp(), sig2);
+    }
+
+    // ==========================================
+    // FUZZ TESTS
+    // ==========================================
+
+    /// @notice Fuzz: accumulatedFees tracks msg.value exactly from real registrations
+    function testFuzz_AccumulatedFeesMatchRegistration(uint96 feeAmount) public {
+        // Fee must be between registrationFee and MAX_REGISTRATION_FEE
+        vm.assume(feeAmount >= 0.001 ether && feeAmount <= 1 ether);
+
+        // Set fee to a value that the fuzzed amount always covers
+        vm.prank(owner);
+        identity.setRegistrationFee(0.001 ether);
+
+        address signer = vm.addr(PRIVKEY);
+        bytes memory message = bytes(_toHex(signer));
+        bytes32 digest = _ethSignedMessageHash(message);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(PRIVKEY, digest);
+
+        vm.deal(signer, uint256(feeAmount) + 1 ether);
+        vm.prank(signer);
+        identity.registerBitcoinAddressV2{value: feeAmount}(PUBKEY_PREFIX, PUBKEY_X, r, s, v, false);
+
+        assertEq(identity.accumulatedFees(), uint256(feeAmount), "accumulatedFees must equal msg.value");
+    }
+
+    /// @notice Fuzz: owner withdrawFees never touches pendingWithdrawals
+    function testFuzz_PendingWithdrawalsNeverDrainedByOwner(uint96 depositAmount) public {
+        vm.assume(depositAmount > 0 && depositAmount <= 10 ether);
+
+        PayableReceiver receiver = new PayableReceiver();
+        address receiverAddr = address(receiver);
+
+        bytes20 testHash = bytes20(keccak256("fuzz-pending"));
+        _setBtcToEvm(testHash, receiverAddr);
+
+        vm.prank(receiverAddr);
+        identity.setReceivePreference(FastPathIdentity.ReceivePreference.ViaHash160);
+
+        vm.deal(address(this), uint256(depositAmount));
+        identity.receiveFunds{value: depositAmount}(testHash);
+
+        // Owner tries to withdraw fees — should revert (no registration fees accumulated)
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NoFeesToWithdraw.selector));
+        identity.withdrawFees();
+
+        // User deposit untouched
+        assertEq(identity.pendingWithdrawals(receiverAddr), uint256(depositAmount),
+            "pendingWithdrawals must be preserved");
     }
 
     // ==========================================
@@ -1171,26 +1709,30 @@ contract FastPathIdentityFullTest is Test {
         identity.registerBitcoinAddressV2{value: 0.001 ether}(PUBKEY_PREFIX, PUBKEY_X, r, s, v, false);
     }
     
+    /// @dev Sets BOTH btcToEvm (slot 6) AND activeEvm (slot 11) for the given hash160.
+    ///      cancelRelink, receiveFunds, and currentController all check activeEvm (slot 11),
+    ///      so both slots must be set for tests that touch those code paths.
+    ///      If you refactor this to only set one slot, several tests will give false positives.
     function _setBtcToEvm(bytes20 hash, address evm) internal {
-        bytes32 slot = keccak256(abi.encode(hash, uint256(5)));
+        bytes32 slot = keccak256(abi.encode(hash, uint256(6)));
         vm.store(address(identity), slot, bytes32(uint256(uint160(evm))));
 
-        bytes32 activeSlot = keccak256(abi.encode(hash, uint256(10)));
+        bytes32 activeSlot = keccak256(abi.encode(hash, uint256(11)));
         vm.store(address(identity), activeSlot, bytes32(uint256(uint160(evm))));
     }
     
     function _setEvmToBtc(address evm, bytes20 hash) internal {
-        bytes32 slot = keccak256(abi.encode(evm, uint256(6)));
+        bytes32 slot = keccak256(abi.encode(evm, uint256(7)));
         vm.store(address(identity), slot, bytes32(hash));
     }
 
     function _setLastLinkTime(bytes20 hash, uint256 time) internal {
-        bytes32 slot = keccak256(abi.encode(hash, uint256(7)));
+        bytes32 slot = keccak256(abi.encode(hash, uint256(8)));
         vm.store(address(identity), slot, bytes32(time));
     }
 
     function _setPendingRelink(bytes20 hash, address newEvm, uint256 unlockTime, bool exists) internal {
-        bytes32 base = keccak256(abi.encode(hash, uint256(9)));
+        bytes32 base = keccak256(abi.encode(hash, uint256(10)));
         vm.store(address(identity), base, bytes32(uint256(uint160(newEvm))));
         vm.store(address(identity), bytes32(uint256(base) + 1), bytes32(unlockTime));
         vm.store(address(identity), bytes32(uint256(base) + 2), bytes32(uint256(exists ? 1 : 0)));
@@ -1294,4 +1836,3 @@ contract FastPathIdentityFullTest is Test {
         return out8;
     }
 }
-
