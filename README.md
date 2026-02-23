@@ -53,6 +53,7 @@ All contracts target **Solidity 0.8.30** with Foundry. The test suite includes 1
 | Contract | Description | Network |
 |:---------|:------------|:--------|
 | **FastPathIdentity** | Permanent BTC Hash160 ↔ EVM registry with secure relink | Sepolia |
+| **FastPathIdentity** | Permanent BTC Hash160 ↔ EVM registry with secure relink |Arbitrum One |
 | **BitcoinGateway** | Payment coordination with ETH fee collection and relayer network | Arbitrum One |
 | **CrossChainProofVerifier** | On-chain BTC → EVM identity proof verification | — |
 | **ZKHash160PrivacyPool** | Groth16 ZK-proof privacy pool for anonymous BTC transactions | — |
@@ -89,7 +90,8 @@ All contracts target **Solidity 0.8.30** with Foundry. The test suite includes 1
 
 | Contract | Address |
 |:---------|:--------|
-| FastPathIdentity (Proof160) | `0x2bAeD4982Aa37c9b7ab5Cd321f4f29e59D9C8757` |
+| FastPathIdentity (Proof160) | `0x2bAeD4982Aa37c9b7ab5Cd321f4f29e59D9C8757` |Sepolia|
+| FastPathIdentity (Proof160) | `0xdff1b8d28EE555A3ABD8fe412c7598F164881e8D` |Arbitrum One|
 | Proof160 NFT | `0x44b70f74708804457E8e4dE39102F8BcDd788787` |
 | BitcoinDAO | `0x8f92abBB1081879a9aCC5E30E28611047a7e7CA2` |
 | BTCBackedVault | `0xE62feC78242b28dB89c80dBbf46576DBAd46D35E` |
