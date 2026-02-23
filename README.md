@@ -85,6 +85,7 @@ All contracts target **Solidity 0.8.30** with Foundry. The test suite includes 1
 | Contract | Address |
 |:---------|:--------|
 | BitcoinGateway | `0xC1cD19BF230ddf86fdB59Dc308D61480057E9d8e` |
+| BitcoinNameService | `0xeACabFD4Eb17629695640Bca79272a097f5f6cC3` |Arbitrum One|
 
 ### Sepolia (Testnet / Identity)
 
