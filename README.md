@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/bitid-logo.png" alt="BitID Logo" width="160" />
+</p>
+
 # FastPath Protocol
 
 **Non-custodial Bitcoin ↔ EVM bridge and identity layer.**
@@ -46,17 +50,17 @@ FastPath runs **6 services** on a single relayer node:
 
 ## Smart Contracts
 
-All contracts target **Solidity 0.8.30** with Foundry. The test suite includes 16 test contracts across the full stack.
+All contracts target **Solidity 0.8.30** with Foundry. 485 tests pass across 16 test suites.
 
 ### Core Contracts
 
-| Contract | Description | Network |
-|:---------|:------------|:--------|
-| **FastPathIdentity** | Permanent BTC Hash160 ↔ EVM registry with secure relink | Sepolia |
-| **FastPathIdentity** | Permanent BTC Hash160 ↔ EVM registry with secure relink |Arbitrum One |
-| **BitcoinGateway** | Payment coordination with ETH fee collection and relayer network | Arbitrum One |
-| **CrossChainProofVerifier** | On-chain BTC → EVM identity proof verification | — |
-| **ZKHash160PrivacyPool** | Groth16 ZK-proof privacy pool for anonymous BTC transactions | — |
+| Contract | Version | Description | Network |
+|:---------|:--------|:------------|:--------|
+| **FastPathIdentity** | — | Permanent BTC Hash160 ↔ EVM registry with secure relink | Sepolia |
+| **BitcoinGateway** | v1.4.0 | Bitcoin payment proof registry. Registered users submit proofs + pay ETH fee (0.0002–0.001 ETH, owner-configurable) | Arbitrum One |
+| **CrossChainProofVerifier** | — | Pure view-only BTC → EVM identity proof verification. Any EVM contract can call it. No storage, no admin. | — |
+| **BitIDRewardDistributor** | — | Mints BITID tokens to reward protocol actions (registration, naming, proof submission) | — |
+| **ZKHash160PrivacyPool** | — | Groth16 ZK-proof privacy pool for anonymous BTC transactions | — |
 
 ### Identity Stack
 
@@ -65,6 +69,35 @@ All contracts target **Solidity 0.8.30** with Foundry. The test suite includes 1
 | **BitcoinNameService (BNS)** | Human-readable names for Hash160 identities (`satoshi.btc`) |
 | **Hash160Vault** | DeFi vault using BTC Hash160 as account identifier |
 | **Proof160 NFT** | On-chain SVG NFT for early adopter identity holders |
+
+### Reward Actions (BitIDRewardDistributor)
+
+| Action | BITID Minted | Trigger |
+|:-------|:-------------|:--------|
+| `IDENTITY_REGISTRATION` | 160 | Register BTC Hash160 in FastPathIdentity |
+| `BNS_REGISTRATION` | 16 | Register a `.btc` name |
+| `BNS_RENEWAL` | 8 | Renew a `.btc` name |
+| `GATEWAY_RELAY` | 1 | Submit a Bitcoin payment proof |
+| `FIRST_TRANSFER` | 32 | First token transfer |
+| `REFERRAL` | 10 | Referral bonus |
+
+### Deployment Order
+
+```
+1. FastPathIdentity
+2. BitcoinGateway          (requires FastPathIdentity address)
+3. BitcoinNameService      (requires FastPathIdentity address)
+4. BitIDRewardDistributor  (requires BITID token address)
+5. CrossChainProofVerifier (requires FastPathIdentity + BitcoinGateway addresses)
+
+# Wire rewards (6 calls):
+distributor.setCaller(identity, true)
+distributor.setCaller(bns, true)
+distributor.setCaller(gateway, true)
+identity.setRewardDistributor(distributor)
+bns.setRewardDistributor(distributor)
+gateway.setRewardDistributor(distributor)
+```
 
 ### Companion / Sandbox
 
@@ -85,22 +118,17 @@ All contracts target **Solidity 0.8.30** with Foundry. The test suite includes 1
 | Contract | Address |
 |:---------|:--------|
 | BitcoinGateway | `0xC1cD19BF230ddf86fdB59Dc308D61480057E9d8e` |
-| BitcoinNameService | `0xeACabFD4Eb17629695640Bca79272a097f5f6cC3` |Arbitrum One|
 
 ### Sepolia (Testnet / Identity)
 
 | Contract | Address |
 |:---------|:--------|
-| FastPathIdentity (Proof160) | `0x2bAeD4982Aa37c9b7ab5Cd321f4f29e59D9C8757` |Sepolia|
-| FastPathIdentity (Proof160) | `0xdff1b8d28EE555A3ABD8fe412c7598F164881e8D` |Arbitrum One|
+| FastPathIdentity (Proof160) | `0x2bAeD4982Aa37c9b7ab5Cd321f4f29e59D9C8757` |
 | Proof160 NFT | `0x44b70f74708804457E8e4dE39102F8BcDd788787` |
 | BitcoinDAO | `0x8f92abBB1081879a9aCC5E30E28611047a7e7CA2` |
 | BTCBackedVault | `0xE62feC78242b28dB89c80dBbf46576DBAd46D35E` |
 | PublicBitcoinGateway | `0xc87D98735fc7300A4e708841a6074A2F30495b06` |
 | DemoUSD | `0x6227e26f3b705e9e0d395cb9cf501a0190ec0510` |
-| BitID| `0xc82364194A0Cc009DdD77203595A8eA782b8E9EA` |
-| BitIDRewardDistributor| `0xE179eea5B5272Ba9A8896A50dFfb425d6D89d2b0` |
-
 
 ---
 
