@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+
 /**
  * @title BNS — Bitcoin Name Service V2, rewardDistributor active
  * @author Emiliano Solazzi — 2026
@@ -56,27 +59,11 @@ interface IBitIDRewardDistributor {
     function reward(address user, uint8 action) external;
 }
 
-interface IERC20 {
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function transfer(address to, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-}
-
 contract BitcoinNameService {
     // ══════════════════════════════════════════════════════════════
     // ERRORS
     // ══════════════════════════════════════════════════════════════
 
-    error NameTooShort();
-    error NameTooLong();
-    error InvalidCharacter(uint256 position);
-    error NameAlreadyTaken();
-    error NameNotRegistered();
-    error NotController();
-    error Hash160AlreadyHasName();
-    error ZeroHash160();
-    error ZeroAddress();
-    error NameExpired();
     error NotOwner();
     error InsufficientFee();
     error NoFeesToWithdraw();
@@ -95,6 +82,22 @@ contract BitcoinNameService {
     error Hash160AlreadyHasSubdomain();
     error FeeTooHigh();
     error NotPendingOwner();
+    error NameTooShort();
+    error NameTooLong();
+    error InvalidCharacter(uint256 position);
+    error LeadingHyphen();
+    error TrailingHyphen();
+    error ConsecutiveHyphens();
+    error MustUseRegisterOrRenew();
+    // ── names
+    error NameNotRegistered();
+    error NameAlreadyTaken();
+    error NameExpired();
+    error NotController();
+    // ── misc
+    error ZeroAddress();
+    error ZeroHash160();
+    error Hash160AlreadyHasName();
 
     // ══════════════════════════════════════════════════════════════
     // CONSTANTS
@@ -174,9 +177,9 @@ contract BitcoinNameService {
     // EVENTS
     // ══════════════════════════════════════════════════════════════
 
-    event NameRegistered(string indexed nameIndexed, bytes20 indexed hash160, string name, uint256 expiresAt);
-    event NameRenewed(string indexed nameIndexed, bytes20 indexed hash160, string name, uint256 newExpiresAt);
-    event NameReleased(string indexed nameIndexed, bytes20 indexed hash160, string name);
+    event NameRegistered(string indexed name, bytes20 indexed hash160, uint256 expiresAt);
+    event NameRenewed(string indexed name, bytes20 indexed hash160, uint256 newExpiresAt);
+    event NameReleased(string indexed name, bytes20 indexed hash160);
     event TextRecordSet(bytes32 indexed nameHash, string key, string value);
     event TextRecordCleared(bytes32 indexed nameHash, string key);
     event RegistrationFeeUpdated(uint256 newFee);
@@ -299,8 +302,7 @@ contract BitcoinNameService {
         _validateName(name);
 
         if (registrationFee > 0) {
-            bool success = feeToken.transferFrom(msg.sender, address(this), registrationFee);
-            if (!success) revert TokenTransferFailed();
+            SafeERC20.safeTransferFrom(IERC20(address(feeToken)), msg.sender, address(this), registrationFee);
         }
 
         // Burn BitID if configured
@@ -322,6 +324,8 @@ contract BitcoinNameService {
     function renew(string calldata name) external payable whenNotPaused nonReentrant {
         if (msg.value < renewalFee) revert InsufficientFee();
 
+        // Validate name format FIRST (before any storage reads)
+        _validateName(name);
         bytes32 nameHash = keccak256(bytes(name));
         NameRecord storage record = _names[nameHash];
         if (!record.exists) revert NameNotRegistered();
@@ -344,7 +348,7 @@ contract BitcoinNameService {
         uint256 baseTime = record.expiresAt > block.timestamp ? record.expiresAt : block.timestamp;
         record.expiresAt = baseTime + REGISTRATION_PERIOD;
 
-        emit NameRenewed(name, record.hash160, name, record.expiresAt);
+        emit NameRenewed(name, record.hash160, record.expiresAt);
 
         // Refund excess ETH (before external reward call — checks-effects-interactions)
         uint256 excess = msg.value - renewalFee;
@@ -366,6 +370,8 @@ contract BitcoinNameService {
     function renewWithToken(string calldata name) external whenNotPaused nonReentrant {
         if (address(feeToken) == address(0)) revert TokenNotAccepted();
 
+        // Validate name format FIRST
+        _validateName(name);
         bytes32 nameHash = keccak256(bytes(name));
         NameRecord storage record = _names[nameHash];
         if (!record.exists) revert NameNotRegistered();
@@ -378,8 +384,7 @@ contract BitcoinNameService {
         }
 
         if (renewalFee > 0) {
-            bool success = feeToken.transferFrom(msg.sender, address(this), renewalFee);
-            if (!success) revert TokenTransferFailed();
+            SafeERC20.safeTransferFrom(IERC20(address(feeToken)), msg.sender, address(this), renewalFee);
         }
 
         // Burn BitID if configured
@@ -390,9 +395,9 @@ contract BitcoinNameService {
         uint256 baseTime = record.expiresAt > block.timestamp ? record.expiresAt : block.timestamp;
         record.expiresAt = baseTime + REGISTRATION_PERIOD;
 
-        emit NameRenewed(name, record.hash160, name, record.expiresAt);
+        emit NameRenewed(name, record.hash160, record.expiresAt);
 
-        // Best-effort reward
+        // Best-effort reward (last — external call to distributor)
         _tryReward(_REWARD_BNS_RENEWAL);
     }
 
@@ -400,7 +405,7 @@ contract BitcoinNameService {
      * @notice Release a name (makes it available for others)
      * @param name The name to release
      */
-    function release(string calldata name) external nonReentrant {
+    function release(string calldata name) external whenNotPaused nonReentrant {
         bytes32 nameHash = keccak256(bytes(name));
         NameRecord storage record = _names[nameHash];
         if (!record.exists) revert NameNotRegistered();
@@ -422,7 +427,7 @@ contract BitcoinNameService {
         delete _names[nameHash];
         delete _nameStrings[nameHash];
 
-        emit NameReleased(name, hash160, name);
+        emit NameReleased(name, hash160);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -658,8 +663,7 @@ contract BitcoinNameService {
         if (address(feeToken) == address(0)) revert TokenNotAccepted();
         uint256 balance = feeToken.balanceOf(address(this));
         if (balance == 0) revert NoFeesToWithdraw();
-        bool success = feeToken.transfer(owner, balance);
-        if (!success) revert TokenTransferFailed();
+        SafeERC20.safeTransfer(IERC20(address(feeToken)), owner, balance);
     }
     function pause() external onlyOwner {
         paused = true;
@@ -864,11 +868,11 @@ contract BitcoinNameService {
             if (!isLower && !isDigit && !isHyphen) revert InvalidCharacter(i);
 
             // No leading hyphen
-            if (i == 0 && isHyphen) revert InvalidCharacter(0);
+            if (i == 0 && isHyphen) revert LeadingHyphen();
             // No trailing hyphen
-            if (i == len - 1 && isHyphen) revert InvalidCharacter(i);
+            if (i == len - 1 && isHyphen) revert TrailingHyphen();
             // No consecutive hyphens
-            if (isHyphen && prevHyphen) revert InvalidCharacter(i);
+            if (isHyphen && prevHyphen) revert ConsecutiveHyphens();
 
             prevHyphen = isHyphen;
         }
@@ -959,7 +963,7 @@ contract BitcoinNameService {
         _reverse[hash160] = name;
         _nameStrings[nameHash] = name;
 
-        emit NameRegistered(name, hash160, name, expiresAt);
+        emit NameRegistered(name, hash160, expiresAt);
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -968,6 +972,6 @@ contract BitcoinNameService {
 
     /// @dev Reject accidental ETH sends outside register()/renew()
     receive() external payable {
-        revert("Use register() or renew()");
+        revert MustUseRegisterOrRenew();
     }
 }
