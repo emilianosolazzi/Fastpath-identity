@@ -29,10 +29,6 @@ contract MockFastPathIdentity is IFastPathIdentity {
     function currentController(bytes20 btcHash160) external view override returns (address) {
         return _controllers[btcHash160];
     }
-
-    function activeEvm(bytes20 btcHash160) external view override returns (address) {
-        return _controllers[btcHash160];
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════
