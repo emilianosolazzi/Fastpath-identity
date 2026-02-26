@@ -273,11 +273,11 @@ contract BitcoinNameService {
 
         _registerInternal(name, hash160);
 
-        // Best-effort reward — registration succeeds even if reward fails
-        _tryReward(_REWARD_BNS_REGISTRATION);
-
-        // Refund excess ETH
+        // Refund excess ETH (before external reward call — checks-effects-interactions)
         _refundExcess();
+
+        // Best-effort reward — registration succeeds even if reward fails (last — external call)
+        _tryReward(_REWARD_BNS_REGISTRATION);
     }
 
     /**
