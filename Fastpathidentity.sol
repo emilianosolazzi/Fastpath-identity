@@ -46,6 +46,17 @@ contract FastPathIdentity {
     error FeeTooHigh();
     error NotPendingOwner();
     error ZeroAddress();
+    // ── fund-flow / receive
+    error NotNewEvmOwner();        // initiateRelink: caller must be the new EVM address
+    error NotPendingRelinkOwner(); // finalizeRelink: only the pending new EVM can finalize
+    error EmergencyStopActive();   // noEmergency: emergency stop is engaged
+    error ZeroValue();             // receiveFunds: cannot send zero ETH
+    error Hash160NotRegistered();  // receiveFunds/receiveTokens: hash160 has no active controller
+    error DirectEvmPreferred();    // receiver opted out of hash160-based routing
+    error NoPendingFunds();        // withdrawPendingFunds: nothing to withdraw
+    error ZeroAmount();            // receiveTokens: amount must be > 0
+    error InvalidToken();          // receiveTokens: token address is zero
+    error PreferenceAlreadySet();  // setReceivePreference: no-op prevention
 
     /// @dev secp256k1 curve order n divided by 2, used to enforce low-s signatures (EIP-2).
     ///      Any signature with s > HALF_ORDER is malleable and must be rejected.
@@ -130,6 +141,7 @@ contract FastPathIdentity {
     event RewardDistributorUpdated(address indexed oldDistributor, address indexed newDistributor);
 
     constructor(uint256 _fee) payable {
+        if (_fee > MAX_REGISTRATION_FEE) revert FeeTooHigh();
         owner = msg.sender;
         registrationFee = _fee;
         locked = false;
@@ -151,7 +163,7 @@ contract FastPathIdentity {
     }
 
     modifier noEmergency() {
-        require(!emergencyStop, "Emergency stop active");
+        if (emergencyStop) revert EmergencyStopActive();
         _;
     }
 
@@ -343,6 +355,20 @@ contract FastPathIdentity {
     }
 
     /**
+     * @notice Rescue ERC-20 tokens accidentally sent to this contract.
+     * @dev Only the configured feeToken or truly stray tokens — does NOT affect
+     *      pendingWithdrawals balances (those are pure ETH pull-payments).
+     * @param token  ERC-20 token contract address
+     * @param to     Recipient (typically owner)
+     * @param amount Token amount to transfer
+     */
+    function rescueERC20(address token, address to, uint256 amount) external onlyOwner {
+        if (token == address(0)) revert ZeroAddress();
+        if (to == address(0)) revert ZeroAddress();
+        IERC20(token).safeTransfer(to, amount);
+    }
+
+    /**
      * @notice Initiate ownership transfer (two-step to prevent typo lockout).
      * @dev Callable only by the current owner. New owner must call acceptOwnership().
      */
@@ -383,7 +409,7 @@ contract FastPathIdentity {
         emit RelinkCooldownUpdated(cooldown);
     }
 
-    function emergencyDisableRelink(bool disable) external onlyOwner {
+    function setEmergencyStop(bool disable) external onlyOwner {
         emergencyStop = disable;
         emit EmergencyStopToggled(disable);
     }
@@ -408,8 +434,8 @@ contract FastPathIdentity {
         address currentOwner = btcToEvm[btcHash160];
         if (currentOwner == address(0)) revert AddressNotRegistered();
 
-        require(newEvm != address(0), "Zero address");
-        require(newEvm == msg.sender, "Must be new EVM owner");
+        if (newEvm == address(0)) revert ZeroAddress();
+        if (newEvm != msg.sender) revert NotNewEvmOwner();
 
         // Prevent overlapping requests
         if (pendingRelinks[btcHash160].exists) revert PendingRelinkExists();
@@ -444,7 +470,7 @@ contract FastPathIdentity {
     function finalizeRelink(bytes20 btcHash160) external noEmergency {
         PendingRelink memory pending = pendingRelinks[btcHash160];
         if (!pending.exists) revert PendingRelinkMissing();
-        require(msg.sender == pending.newEvm, "Only pending new owner");
+        if (msg.sender != pending.newEvm) revert NotPendingRelinkOwner();
         if (block.timestamp < pending.unlockTime) revert CooldownActive();
 
         address oldEvm = btcToEvm[btcHash160];
@@ -533,7 +559,7 @@ contract FastPathIdentity {
 
     /// @notice Set user's preference for receiving funds (DirectEVM or ViaHash160)
     function setReceivePreference(ReceivePreference preference) external {
-        require(receivePreference[msg.sender] != preference, "Preference already set");
+        if (receivePreference[msg.sender] == preference) revert PreferenceAlreadySet();
         receivePreference[msg.sender] = preference;
         emit ReceivePreferenceUpdated(msg.sender, preference);
     }
@@ -545,10 +571,10 @@ contract FastPathIdentity {
     ///      Safes, and contracts with non-trivial receive() functions.
     function receiveFunds(bytes20 btcHash160) external payable nonReentrant {
         if (btcHash160 == bytes20(0)) revert ZeroHash160();
-        require(msg.value > 0, "Cannot send zero value");
+        if (msg.value == 0) revert ZeroValue();
         address receiver = activeEvm[btcHash160];
-        require(receiver != address(0), "Hash160 not registered");
-        require(receivePreference[receiver] == ReceivePreference.ViaHash160, "User prefers direct EVM receiving");
+        if (receiver == address(0)) revert Hash160NotRegistered();
+        if (receivePreference[receiver] != ReceivePreference.ViaHash160) revert DirectEvmPreferred();
 
         pendingWithdrawals[receiver] += msg.value;
 
@@ -560,7 +586,7 @@ contract FastPathIdentity {
     ///      Works with EOAs, multisigs, Safes, and any contract.
     function withdrawPendingFunds() external nonReentrant {
         uint256 amount = pendingWithdrawals[msg.sender];
-        require(amount > 0, "No pending funds");
+        if (amount == 0) revert NoPendingFunds();
 
         // Zero balance before external call (CEI pattern)
         pendingWithdrawals[msg.sender] = 0;
@@ -574,17 +600,16 @@ contract FastPathIdentity {
     /// @notice Receive ERC20 tokens via hash160 (only if user opted in)
     function receiveTokens(bytes20 btcHash160, address token, uint256 amount) external nonReentrant {
         if (btcHash160 == bytes20(0)) revert ZeroHash160();
-        require(amount > 0, "Cannot send zero amount");
-        require(token != address(0), "Invalid token address");
+        if (amount == 0) revert ZeroAmount();
+        if (token == address(0)) revert InvalidToken();
         address receiver = activeEvm[btcHash160];
-        require(receiver != address(0), "Hash160 not registered");
-        require(receivePreference[receiver] == ReceivePreference.ViaHash160, "User prefers direct EVM receiving");
+        if (receiver == address(0)) revert Hash160NotRegistered();
+        if (receivePreference[receiver] != ReceivePreference.ViaHash160) revert DirectEvmPreferred();
 
-        // Emit event before external call (CEI pattern)
-        emit FundsReceived(btcHash160, receiver, amount, token);
-
-        // Transfer tokens from msg.sender to receiver
+        // Transfer first, emit after — event only fires on success
         IERC20(token).safeTransferFrom(msg.sender, receiver, amount);
+
+        emit FundsReceived(btcHash160, receiver, amount, token);
     }
 
     // ==========================================
@@ -928,5 +953,15 @@ contract FastPathIdentity {
             str[3 + i * 2] = alphabet[uint8(data[i] & 0x0f)];
         }
         return string(str);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    // FALLBACK
+    // ══════════════════════════════════════════════════════════════
+
+    /// @dev Credit bare ETH transfers to accumulatedFees so they are recoverable
+    ///      via withdrawFees(). Prevents ETH from being permanently stranded.
+    receive() external payable {
+        accumulatedFees += msg.value;
     }
 }
