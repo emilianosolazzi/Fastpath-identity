@@ -46,7 +46,6 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 interface IFastPathIdentity {
     function currentController(bytes20 btcHash160) external view returns (address);
-    function activeEvm(bytes20 btcHash160) external view returns (address);
 }
 
 interface IBitID {
@@ -73,7 +72,6 @@ contract BitcoinNameService {
     error ParentNameNotOwned();
     error SubdomainNotRegistered();
     error TokenNotAccepted();
-    error TokenTransferFailed();
     error TooManyTextRecords();
     error ContractPaused();
     error RefundFailed();
@@ -109,8 +107,9 @@ contract BitcoinNameService {
     uint256 public constant GRACE_PERIOD = 30 days; // After expiry, original owner can still renew
     uint256 public constant RECLAIM_PERIOD = 14 days; // After grace, previous owner has priority to re-register
     uint256 public constant MAX_TEXT_KEYS = 20; // Cap text records per name to bound release() gas
-    uint256 public constant MAX_ETH_FEE = 1 ether; // Cap on ETH fee changes (M3)
-    uint256 public constant MAX_BITID_FEE = 10_000_00000000; // 10,000 BitID cap (8 decimals) (M3)
+    uint256 public constant MAX_ETH_FEE = 1 ether;              // Cap on ETH fee changes (M3)
+    uint256 public constant MAX_TOKEN_FEE = 1_000_000_000;       // Cap on ERC-20 token fee (1,000 WBTC at 8 decimals)
+    uint256 public constant MAX_BITID_FEE = 10_000_00000000;     // 10,000 BitID cap (8 decimals) (M3)
 
     /// @notice Contract version for on-chain verification
     string public constant VERSION = "1.0.0";
@@ -126,9 +125,17 @@ contract BitcoinNameService {
     IFastPathIdentity public immutable identity;
     address public owner;
     address public pendingOwner;
+    /// @notice Registration fee in ETH (wei)
     uint256 public registrationFee;
+    /// @notice Renewal fee in ETH (wei)
     uint256 public renewalFee;
-    IERC20 public feeToken; // Optional: pay fees in WBTC or any ERC-20 (address(0) = ETH only)
+    /// @notice Registration fee in ERC-20 token units — stored in token-native decimals
+    ///         (e.g., 1_000_000 = 0.01 WBTC at 8 decimals). Set independently from registrationFee.
+    uint256 public registrationFeeToken;
+    /// @notice Renewal fee in ERC-20 token units. Set independently from renewalFee.
+    uint256 public renewalFeeToken;
+    /// @notice Accepted ERC-20 for fee payment (address(0) = ETH only)
+    IERC20 public feeToken;
     bool public paused;
     uint256 private _reentrancyLock = 1; // 1 = unlocked, 2 = locked
 
@@ -184,6 +191,8 @@ contract BitcoinNameService {
     event TextRecordCleared(bytes32 indexed nameHash, string key);
     event RegistrationFeeUpdated(uint256 newFee);
     event RenewalFeeUpdated(uint256 newFee);
+    event RegistrationFeeTokenUpdated(uint256 newFee);
+    event RenewalFeeTokenUpdated(uint256 newFee);
     event FeeTokenUpdated(address token);
     event SubdomainRegistered(bytes32 indexed parentNameHash, string subLabel, bytes20 indexed hash160);
     event SubdomainReleased(bytes32 indexed parentNameHash, string subLabel);
@@ -285,8 +294,9 @@ contract BitcoinNameService {
 
     /**
      * @notice Register a name paying with the accepted ERC-20 token (e.g., WBTC)
-     * @dev Caller must have approved this contract for at least registrationFee tokens
-     *      AND approved BitID for at least registrationBitIDFee (if enabled)
+     * @dev Caller must have approved this contract for at least `registrationFeeToken` tokens
+     *      AND approved BitID for at least `registrationBitIDFee` (if enabled).
+     *      Token amounts are in token-native decimals — NOT the same as `registrationFee` (ETH/wei).
      * @param name The name to register
      * @param hash160 Your Bitcoin hash160
      */
@@ -301,8 +311,8 @@ contract BitcoinNameService {
         // Validate name format BEFORE external calls
         _validateName(name);
 
-        if (registrationFee > 0) {
-            SafeERC20.safeTransferFrom(IERC20(address(feeToken)), msg.sender, address(this), registrationFee);
+        if (registrationFeeToken > 0) {
+            SafeERC20.safeTransferFrom(IERC20(address(feeToken)), msg.sender, address(this), registrationFeeToken);
         }
 
         // Burn BitID if configured
@@ -363,8 +373,9 @@ contract BitcoinNameService {
 
     /**
      * @notice Renew a name paying with the accepted ERC-20 token
-     * @dev Caller must have approved this contract for at least renewalFee tokens
-     *      AND approved BitID for at least renewalBitIDFee (if enabled)
+     * @dev Caller must have approved this contract for at least `renewalFeeToken` tokens
+     *      AND approved BitID for at least `renewalBitIDFee` (if enabled).
+     *      Token amounts are in token-native decimals — NOT the same as `renewalFee` (ETH/wei).
      * @param name The name to renew
      */
     function renewWithToken(string calldata name) external whenNotPaused nonReentrant {
@@ -383,8 +394,8 @@ contract BitcoinNameService {
             revert NameExpired();
         }
 
-        if (renewalFee > 0) {
-            SafeERC20.safeTransferFrom(IERC20(address(feeToken)), msg.sender, address(this), renewalFee);
+        if (renewalFeeToken > 0) {
+            SafeERC20.safeTransferFrom(IERC20(address(feeToken)), msg.sender, address(this), renewalFeeToken);
         }
 
         // Burn BitID if configured
@@ -465,7 +476,7 @@ contract BitcoinNameService {
      * @param name The name
      * @param key The record key to delete
      */
-    function clearText(string calldata name, string calldata key) external {
+    function clearText(string calldata name, string calldata key) external whenNotPaused {
         bytes32 nameHash = keccak256(bytes(name));
         NameRecord storage record = _names[nameHash];
         if (!record.exists) revert NameNotRegistered();
@@ -621,6 +632,28 @@ contract BitcoinNameService {
         if (_fee > MAX_ETH_FEE) revert FeeTooHigh();
         renewalFee = _fee;
         emit RenewalFeeUpdated(_fee);
+    }
+
+    /**
+     * @notice Set the ERC-20 token registration fee in token-native units
+     * @dev NOT capped by MAX_ETH_FEE — token decimals differ from ETH.
+     *      Example: 1_000_000 = 0.01 WBTC (8 decimals).
+     *      Separate from `registrationFee` (ETH) to prevent decimal mismatch.
+     */
+    function setRegistrationFeeToken(uint256 _fee) external onlyOwner {
+        if (_fee > MAX_TOKEN_FEE) revert FeeTooHigh();
+        registrationFeeToken = _fee;
+        emit RegistrationFeeTokenUpdated(_fee);
+    }
+
+    /**
+     * @notice Set the ERC-20 token renewal fee in token-native units
+     * @dev Same decimal caveat as setRegistrationFeeToken.
+     */
+    function setRenewalFeeToken(uint256 _fee) external onlyOwner {
+        if (_fee > MAX_TOKEN_FEE) revert FeeTooHigh();
+        renewalFeeToken = _fee;
+        emit RenewalFeeTokenUpdated(_fee);
     }
 
     function withdrawFees() external onlyOwner nonReentrant {
