@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import "contracts/fastapthidentity.sol";
+import "contracts/Fastpathidentity.sol";
 
 interface Vm {
     function deal(address who, uint256 newBalance) external;
@@ -1074,7 +1074,7 @@ contract FastPathIdentityFullTest is Test {
         _setPendingRelink(expected, newEvm, block.timestamp - 1, true);
         _setBtcToEvm(expected, address(0x0000000000000000000000000000000000000001));
         vm.prank(attacker);
-        vm.expectRevert("Only pending new owner");
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NotPendingRelinkOwner.selector));
         identity.finalizeRelink(expected);
     }
 
@@ -1128,7 +1128,7 @@ contract FastPathIdentityFullTest is Test {
     
     function testEmergencyDisableRelink() public {
         vm.prank(owner);
-        identity.emergencyDisableRelink(true);
+        identity.setEmergencyStop(true);
         assertTrue(identity.emergencyStop(), "emergency not activated");
     }
 
@@ -1136,11 +1136,11 @@ contract FastPathIdentityFullTest is Test {
         vm.prank(owner);
         identity.setRelinkEnabled(true);
         vm.prank(owner);
-        identity.emergencyDisableRelink(true);
+        identity.setEmergencyStop(true);
 
         bytes memory pubkey = abi.encodePacked(bytes1(PUBKEY_PREFIX), PUBKEY_X);
         bytes memory sig = new bytes(65);
-        vm.expectRevert("Emergency stop active");
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.EmergencyStopActive.selector));
         identity.initiateRelink(hash160, address(0x0000000000000000000000000000000000000002), pubkey, sig);
     }
 
@@ -1151,10 +1151,10 @@ contract FastPathIdentityFullTest is Test {
         _setPendingRelink(expected, newEvm, block.timestamp - 1, true);
 
         vm.prank(owner);
-        identity.emergencyDisableRelink(true);
+        identity.setEmergencyStop(true);
 
         vm.prank(newEvm);
-        vm.expectRevert("Emergency stop active");
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.EmergencyStopActive.selector));
         identity.finalizeRelink(expected);
     }
 
@@ -1165,10 +1165,10 @@ contract FastPathIdentityFullTest is Test {
         _setPendingRelink(expected, vm.addr(2), block.timestamp + 1000, true);
 
         vm.prank(owner);
-        identity.emergencyDisableRelink(true);
+        identity.setEmergencyStop(true);
 
         vm.prank(currentOwner);
-        vm.expectRevert("Emergency stop active");
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.EmergencyStopActive.selector));
         identity.cancelRelink(expected);
     }
 
@@ -1179,12 +1179,12 @@ contract FastPathIdentityFullTest is Test {
 
         // Enable emergency
         vm.prank(owner);
-        identity.emergencyDisableRelink(true);
+        identity.setEmergencyStop(true);
         assertTrue(identity.emergencyStop(), "emergency should be active");
 
         // Disable emergency
         vm.prank(owner);
-        identity.emergencyDisableRelink(false);
+        identity.setEmergencyStop(false);
         assertTrue(!identity.emergencyStop(), "emergency should be disabled");
 
         // Now relink operations should proceed — test that cancelRelink can be called
@@ -1577,7 +1577,7 @@ contract FastPathIdentityFullTest is Test {
     }
 
     function testWithdrawPendingFunds_NothingToWithdraw() public {
-        vm.expectRevert(bytes("No pending funds"));
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NoPendingFunds.selector));
         identity.withdrawPendingFunds();
     }
 
@@ -1637,21 +1637,21 @@ contract FastPathIdentityFullTest is Test {
     function testReceiveFunds_ZeroValue_Reverts() public {
         _setBtcToEvm(hash160, address(0x0000000000000000000000000000000000000001));
 
-        vm.expectRevert(bytes("Cannot send zero value"));
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.ZeroValue.selector));
         identity.receiveFunds{value: 0}(hash160);
     }
 
     function testReceiveTokens_ZeroAmount_Reverts() public {
         _setBtcToEvm(hash160, address(0x0000000000000000000000000000000000000001));
 
-        vm.expectRevert(bytes("Cannot send zero amount"));
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.ZeroAmount.selector));
         identity.receiveTokens(hash160, address(0x0000000000000000000000000000000000000001), 0);
     }
 
     function testReceiveTokens_ZeroToken_Reverts() public {
         _setBtcToEvm(hash160, address(0x0000000000000000000000000000000000000001));
 
-        vm.expectRevert(bytes("Invalid token address"));
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.InvalidToken.selector));
         identity.receiveTokens(hash160, address(0), 1);
     }
 
@@ -1659,7 +1659,7 @@ contract FastPathIdentityFullTest is Test {
         bytes20 unknownHash = bytes20(keccak256("nobody-here"));
         vm.deal(address(this), 1 ether);
 
-        vm.expectRevert(bytes("Hash160 not registered"));
+        vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.Hash160NotRegistered.selector));
         identity.receiveFunds{value: 1 wei}(unknownHash);
     }
 

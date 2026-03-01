@@ -1,0 +1,22 @@
+{
+  "name": "fastpath-identity",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Static analysis and lint tooling for Fastpath Identity Protocol",
+  "scripts": {
+    "solhint": "solhint \"src/**/*.sol\"",
+    "solhint:fix": "solhint \"src/**/*.sol\" --fix",
+    "slither": "slither src/ --config-file slither.config.json",
+    "slither:triage": "slither src/ --config-file slither.config.json --triage-mode",
+    "audit": "npm run solhint && npm run slither",
+    "build": "forge build",
+    "test": "forge test -vvv",
+    "test:security": "forge test --match-path \"test/*Security*\" -vvv",
+    "test:fuzz": "forge test --match-path \"test/Invariant_Fuzz*\" -vvv",
+    "test:gas": "forge test --gas-report",
+    "coverage": "forge coverage"
+  },
+  "devDependencies": {
+    "solhint": "^5.0.5"
+  }
+}

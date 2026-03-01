@@ -1,0 +1,29 @@
+# Compiler files
+cache/
+out/
+artifacts/
+
+# Ignores development broadcast logs
+/broadcast
+/broadcast/*/
+
+# Docs
+docs/
+
+# Dotenv file
+.env
+
+# Node modules
+node_modules/
+
+# Coverage
+lcov.info
+coverage/
+
+# Foundry
+/lib
+/.gas-snapshot
+
+# OS
+.DS_Store
+Thumbs.db

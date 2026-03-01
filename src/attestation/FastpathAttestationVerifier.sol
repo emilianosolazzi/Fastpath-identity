@@ -112,7 +112,7 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
         uint256 timestamp,
         uint256 nonce,
         bytes calldata signature
-    ) public returns (bool valid) {
+    ) public virtual returns (bool valid) {
         if (trustedSigner == address(0)) revert SignerNotSet();
         if (evmAddress != msg.sender) revert AddressMismatch();
         if (block.timestamp > timestamp + maxAge) revert AttestationExpired();

@@ -2,7 +2,7 @@
 pragma solidity 0.8.30;
 
 import "forge-std/Test.sol";
-import "../empty_src/BitcoinNameService.sol";
+import "contracts/BitcoinNameService.sol";
 
 /**
  * @title Bitcoin Name Service — Full Test Suite
@@ -230,7 +230,7 @@ contract BitcoinNameService_FullTest is Test {
 
     function test_Register_RevertIf_LeadingHyphen() public {
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(BitcoinNameService.InvalidCharacter.selector, 0));
+        vm.expectRevert(abi.encodeWithSelector(BitcoinNameService.LeadingHyphen.selector));
         bns.register{value: FEE}("-satoshi", ALICE_HASH160);
     }
 
@@ -240,7 +240,7 @@ contract BitcoinNameService_FullTest is Test {
 
     function test_Register_RevertIf_TrailingHyphen() public {
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(BitcoinNameService.InvalidCharacter.selector, 7));
+        vm.expectRevert(abi.encodeWithSelector(BitcoinNameService.TrailingHyphen.selector));
         bns.register{value: FEE}("satoshi-", ALICE_HASH160);
     }
 
@@ -250,7 +250,7 @@ contract BitcoinNameService_FullTest is Test {
 
     function test_Register_RevertIf_ConsecutiveHyphens() public {
         vm.prank(alice);
-        vm.expectRevert(abi.encodeWithSelector(BitcoinNameService.InvalidCharacter.selector, 4));
+        vm.expectRevert(abi.encodeWithSelector(BitcoinNameService.ConsecutiveHyphens.selector));
         bns.register{value: FEE}("sat--oshi", ALICE_HASH160);
     }
 
@@ -738,7 +738,7 @@ contract BitcoinNameService_FullTest is Test {
 
         // Use a WBTC-scale fee (0.001 WBTC = 100_000 sats)
         uint256 tokenFee = 100_000;
-        bns.setRegistrationFee(tokenFee);
+        bns.setRegistrationFeeToken(tokenFee);
         bns.setFeeToken(address(wbtc));
 
         // Give Alice some WBTC and approve
@@ -772,7 +772,7 @@ contract BitcoinNameService_FullTest is Test {
     function test_WithdrawTokenFees() public {
         MockWBTC wbtc = new MockWBTC();
         uint256 tokenFee = 100_000;
-        bns.setRegistrationFee(tokenFee);
+        bns.setRegistrationFeeToken(tokenFee);
         bns.setFeeToken(address(wbtc));
 
         wbtc.mint(alice, 1e8);
@@ -1132,11 +1132,17 @@ contract BitcoinNameService_FullTest is Test {
 
         bns.pause();
 
-        // Release is not gated by whenNotPaused — controller can always clean up
+        // release() is gated by whenNotPaused — should revert while paused
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(BitcoinNameService.ContractPaused.selector));
+        bns.release("satoshi");
+
+        // Unpause, then release succeeds
+        bns.unpause();
         vm.prank(alice);
         bns.release("satoshi");
 
-        // Name is now available (release succeeded despite pause)
+        // Name is now available
         (bool isAvailable,) = bns.available("satoshi");
         assertTrue(isAvailable);
     }
@@ -1225,7 +1231,7 @@ contract BitcoinNameService_FullTest is Test {
         uint256 bitidFee = 50_00000000;
 
         bns.setFeeToken(address(wbtc));
-        bns.setRegistrationFee(tokenFee);
+        bns.setRegistrationFeeToken(tokenFee);
         bns.setBitID(address(bitidToken));
         bns.setRegistrationBitIDFee(bitidFee);
 

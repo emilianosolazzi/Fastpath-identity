@@ -1,0 +1,14 @@
+{
+  "filter_paths": "lib|test|script|out|cache|node_modules",
+  "solc_remaps": [
+    "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+    "contracts/=src/",
+    "forge-std/=lib/forge-std/src/"
+  ],
+  "exclude_low": false,
+  "exclude_informational": false,
+  "exclude_optimization": false,
+  "detectors_to_run": "all",
+  "printers_to_run": "",
+  "exclude_dependencies": true
+}

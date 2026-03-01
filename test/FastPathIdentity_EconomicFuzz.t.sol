@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import "contracts/fastapthidentity.sol";
+import "contracts/Fastpathidentity.sol";
 
 interface Vm {
     function deal(address who, uint256 newBalance) external;

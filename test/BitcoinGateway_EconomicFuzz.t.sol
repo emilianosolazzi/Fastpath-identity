@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity 0.8.30;
 
-import "contracts/BitcoinGateway.sol";
+import "contracts/Bitcoingateway.sol";
 
 interface Vm {
     function deal(address who, uint256 newBalance) external;

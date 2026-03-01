@@ -2,7 +2,7 @@
 pragma solidity 0.8.30;
 
 import "forge-std/Test.sol";
-import "contracts/BitcoinGateway.sol";
+import "contracts/Bitcoingateway.sol";
 
 /**
  * @title Reentrancy Security Tests for BitcoinGateway
