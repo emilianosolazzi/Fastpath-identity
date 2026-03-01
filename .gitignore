@@ -21,7 +21,6 @@ lcov.info
 coverage/
 
 # Foundry
-/lib
 /.gas-snapshot
 
 # OS
