@@ -19,14 +19,10 @@ import "contracts/DemoUSD.sol";
  * │                                                                        │
  * │  When BTCBackedVaultV2.attestBalance() calls verifier.verifyBalance() │
  * │  the msg.sender inside the verifier is the VAULT, not the user.       │
- * │  As a result, attestBalance() ALWAYS reverts with AddressMismatch(). │
+ * │  This was fixed by adding a trustedCallers whitelist to the verifier.  │
+ * │  The vault is registered as a trusted caller via setTrustedCaller().   │
  * │                                                                        │
- * │  FIX: Either (a) add a delegated caller allowlist to the verifier,    │
- * │  or (b) use a two-step flow where the user calls the verifier first   │
- * │  and the vault reads the verified result.                             │
- * │                                                                        │
- * │  These tests use a MockVerifier to bypass the issue and test the      │
- * │  vault's own logic (freshness, LTV, liquidation, etc.) in isolation.  │
+ * │  These tests use the real verifier with the vault whitelisted.        │
  * └─────────────────────────────────────────────────────────────────────────┘
  *
  * Findings tested:
@@ -42,46 +38,11 @@ import "contracts/DemoUSD.sol";
  *   [L-2] totalUsers counter accuracy
  */
 
-/// @notice Mock verifier that always succeeds — isolates vault logic from verifier msg.sender issue
-contract MockVerifierAlwaysValid is FastpathAttestationVerifier {
-    constructor(address _signer) FastpathAttestationVerifier(_signer) {}
-
-    /// @dev Override to skip msg.sender check (since vault is called by user but verifier sees vault as sender)
-    function verifyBalance(
-        address evmAddress,
-        string calldata btcAddress,
-        uint256 balanceSats,
-        uint256 timestamp,
-        uint256 nonce,
-        bytes calldata signature
-    ) public override returns (bool valid) {
-        // Skip AddressMismatch check — accept any caller
-        if (trustedSigner == address(0)) revert SignerNotSet();
-        if (block.timestamp > timestamp + maxAge) revert AttestationExpired();
-        if (usedNonces[nonce]) revert NonceAlreadyUsed();
-
-        bytes32 structHash = keccak256(abi.encode(
-            keccak256("BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"),
-            evmAddress,
-            keccak256(bytes(btcAddress)),
-            balanceSats,
-            timestamp,
-            nonce
-        ));
-
-        bytes32 digest = _hashTypedDataV4(structHash);
-        address recovered = ECDSA.recover(digest, signature);
-        if (recovered != trustedSigner) revert InvalidSignature();
-
-        usedNonces[nonce] = true;
-        emit BalanceVerified(evmAddress, btcAddress, balanceSats, nonce);
-        return true;
-    }
-}
+/// @notice No mock needed — real verifier with vault whitelisted as trusted caller
 
 contract BTCBackedVaultV2SecurityTest is Test {
     BTCBackedVaultV2 vault;
-    MockVerifierAlwaysValid verifier;
+    FastpathAttestationVerifier verifier;
     DemoUSD demoUSD;
 
     address owner = address(0xA11CE);
@@ -97,10 +58,12 @@ contract BTCBackedVaultV2SecurityTest is Test {
         signer = vm.addr(signerPk);
 
         vm.startPrank(owner);
-        verifier = new MockVerifierAlwaysValid(signer);
+        verifier = new FastpathAttestationVerifier(signer);
         // Extend maxAge so attestations don't expire during test setup
         verifier.updateMaxAge(365 days);
+        // Whitelist the vault as a trusted caller so it can verify on behalf of users
         vault = new BTCBackedVaultV2(address(verifier));
+        verifier.setTrustedCaller(address(vault), true);
         demoUSD = new DemoUSD();
         demoUSD.setVault(address(vault));
         vault.setDemoUSD(address(demoUSD));

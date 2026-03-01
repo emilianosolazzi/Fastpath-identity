@@ -12,7 +12,7 @@ import "contracts/Bitcoingateway.sol";
  * @notice Stateful invariant tests that verify critical protocol properties
  *         hold across arbitrary sequences of operations.
  *
- * Uses MockVerifier to bypass the verifier msg.sender mismatch (see C-1 in VaultV2 security tests).
+ * Uses the real FastpathAttestationVerifier with the vault whitelisted as a trusted caller.
  *
  * Invariants:
  *   INV-1: totalBorrowed == Σ positions[i].borrowedUSD
@@ -28,49 +28,14 @@ import "contracts/Bitcoingateway.sol";
  *   FUZZ-4: Liquidation math precision at extreme prices
  */
 
-/// @notice Mock verifier that skips msg.sender check for vault integration testing
-contract MockVerifier is FastpathAttestationVerifier {
-    using ECDSA for bytes32;
-
-    constructor(address _signer) FastpathAttestationVerifier(_signer) {}
-
-    function verifyBalance(
-        address evmAddress,
-        string calldata btcAddress,
-        uint256 balanceSats,
-        uint256 timestamp,
-        uint256 nonce,
-        bytes calldata signature
-    ) public override returns (bool valid) {
-        if (trustedSigner == address(0)) revert SignerNotSet();
-        if (block.timestamp > timestamp + maxAge) revert AttestationExpired();
-        if (usedNonces[nonce]) revert NonceAlreadyUsed();
-
-        bytes32 structHash = keccak256(abi.encode(
-            keccak256("BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"),
-            evmAddress,
-            keccak256(bytes(btcAddress)),
-            balanceSats,
-            timestamp,
-            nonce
-        ));
-
-        bytes32 digest = _hashTypedDataV4(structHash);
-        address recovered = ECDSA.recover(digest, signature);
-        if (recovered != trustedSigner) revert InvalidSignature();
-
-        usedNonces[nonce] = true;
-        emit BalanceVerified(evmAddress, btcAddress, balanceSats, nonce);
-        return true;
-    }
-}
+// No MockVerifier needed — real verifier with trusted caller whitelist
 
 // ════════════════════════════════════════════════════════
 // VaultV2 Handler for Invariant Testing
 // ════════════════════════════════════════════════════════
 contract VaultV2Handler is Test {
     BTCBackedVaultV2 public vault;
-    MockVerifier public verifier;
+    FastpathAttestationVerifier public verifier;
     DemoUSD public demoUSD;
 
     uint256 internal signerPk = 0xABCDEF;
@@ -80,7 +45,7 @@ contract VaultV2Handler is Test {
 
     constructor(
         BTCBackedVaultV2 _vault,
-        MockVerifier _verifier,
+        FastpathAttestationVerifier _verifier,
         DemoUSD _demoUSD,
         address[] memory _actors
     ) {
@@ -166,7 +131,7 @@ contract VaultV2Handler is Test {
 // ════════════════════════════════════════════════════════
 contract InvariantVaultV2Test is Test {
     BTCBackedVaultV2 vault;
-    MockVerifier verifier;
+    FastpathAttestationVerifier verifier;
     DemoUSD demoUSD;
     VaultV2Handler handler;
 
@@ -176,9 +141,10 @@ contract InvariantVaultV2Test is Test {
         uint256 signerPk = 0xABCDEF;
         address signer = vm.addr(signerPk);
 
-        verifier = new MockVerifier(signer);
+        verifier = new FastpathAttestationVerifier(signer);
         verifier.updateMaxAge(365 days);
         vault = new BTCBackedVaultV2(address(verifier));
+        verifier.setTrustedCaller(address(vault), true);
         demoUSD = new DemoUSD();
         demoUSD.setVault(address(vault));
         vault.setDemoUSD(address(demoUSD));
@@ -224,7 +190,7 @@ contract InvariantVaultV2Test is Test {
 // ════════════════════════════════════════════════════════
 contract FuzzTests is Test {
     BTCBackedVaultV2 vault;
-    MockVerifier verifier;
+    FastpathAttestationVerifier verifier;
     DemoUSD demoUSD;
     BitcoinGateway gw;
 
@@ -235,9 +201,10 @@ contract FuzzTests is Test {
 
     function setUp() public {
         signer = vm.addr(signerPk);
-        verifier = new MockVerifier(signer);
+        verifier = new FastpathAttestationVerifier(signer);
         verifier.updateMaxAge(365 days);
         vault = new BTCBackedVaultV2(address(verifier));
+        verifier.setTrustedCaller(address(vault), true);
         demoUSD = new DemoUSD();
         demoUSD.setVault(address(vault));
         vault.setDemoUSD(address(demoUSD));

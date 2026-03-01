@@ -40,6 +40,9 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
     /// @notice Nonces that have been consumed (replay protection)
     mapping(uint256 => bool) public usedNonces;
 
+    /// @notice Contracts trusted to call verify* on behalf of users (e.g. BTCBackedVaultV2)
+    mapping(address => bool) public trustedCallers;
+
     // ── EIP-712 Type Hashes ────────────────────────────────────
     
     bytes32 private constant BALANCE_TYPEHASH = keccak256(
@@ -56,6 +59,7 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
     event MaxAgeUpdated(uint256 oldMaxAge, uint256 newMaxAge);
     event BalanceVerified(address indexed evmAddress, string btcAddress, uint256 balanceSats, uint256 nonce);
     event OwnershipVerified(address indexed evmAddress, string btcAddress, string utxoTxid, uint32 utxoIndex, uint256 nonce);
+    event TrustedCallerUpdated(address indexed caller, bool trusted);
 
     // ── Errors ─────────────────────────────────────────────────
 
@@ -93,6 +97,15 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
         maxAge = _maxAge;
     }
 
+    /// @notice Add or remove a trusted caller (e.g. BTCBackedVaultV2)
+    /// @dev Trusted callers may invoke verifyBalance/verifyOwnership on behalf of users,
+    ///      bypassing the msg.sender == evmAddress check.
+    function setTrustedCaller(address caller, bool trusted) external onlyOwner {
+        if (caller == address(0)) revert ZeroAddress();
+        trustedCallers[caller] = trusted;
+        emit TrustedCallerUpdated(caller, trusted);
+    }
+
     // ── Verification ───────────────────────────────────────────
 
     /**
@@ -114,7 +127,8 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
         bytes calldata signature
     ) public virtual returns (bool valid) {
         if (trustedSigner == address(0)) revert SignerNotSet();
-        if (evmAddress != msg.sender) revert AddressMismatch();
+        // Allow trusted callers (e.g. VaultV2) to verify on behalf of users
+        if (evmAddress != msg.sender && !trustedCallers[msg.sender]) revert AddressMismatch();
         if (block.timestamp > timestamp + maxAge) revert AttestationExpired();
         if (usedNonces[nonce]) revert NonceAlreadyUsed();
 
@@ -165,7 +179,7 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
         bytes calldata signature
     ) public returns (bool valid) {
         if (trustedSigner == address(0)) revert SignerNotSet();
-        if (evmAddress != msg.sender) revert AddressMismatch();
+        if (evmAddress != msg.sender && !trustedCallers[msg.sender]) revert AddressMismatch();
         if (block.timestamp > timestamp + maxAge) revert AttestationExpired();
         if (usedNonces[nonce]) revert NonceAlreadyUsed();
 
