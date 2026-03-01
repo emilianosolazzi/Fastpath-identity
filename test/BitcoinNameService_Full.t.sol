@@ -105,10 +105,10 @@ contract BitcoinNameService_FullTest is Test {
     address public charlie;
     address public deployer;
 
-    bytes20 constant ALICE_HASH160   = bytes20(uint160(0xA11CE));
-    bytes20 constant BOB_HASH160     = bytes20(uint160(0xB0B));
+    bytes20 constant ALICE_HASH160 = bytes20(uint160(0xA11CE));
+    bytes20 constant BOB_HASH160 = bytes20(uint160(0xB0B));
     bytes20 constant CHARLIE_HASH160 = bytes20(uint160(0xC4A711E));
-    bytes20 constant ORPHAN_HASH160  = bytes20(uint160(0xDEAD));
+    bytes20 constant ORPHAN_HASH160 = bytes20(uint160(0xDEAD));
 
     uint256 constant FEE = 0.01 ether;
 

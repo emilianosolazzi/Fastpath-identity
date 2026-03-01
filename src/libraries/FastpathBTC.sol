@@ -22,43 +22,43 @@ library FastPathBTC {
     error InvalidBech32Char();
 
     // Length and protocol constants
-    uint8 constant internal MIN_ADDR_LEN = 26;
-    uint8 constant internal MAX_ADDR_LEN = 62;
-    uint8 constant internal MIN_BASE58_LEN = 26;
-    uint8 constant internal MAX_BASE58_LEN = 35;
-    uint8 constant internal BASE58_DECODE_MIN = 25; // 21 hash + 4 checksum
-    uint8 constant internal BASE58_HASH_LEN = 21;
-    uint8 constant internal BASE58_CHECKSUM_LEN = 4;
-    uint8 constant internal MIN_BECH32_SEP_REMAIN = 7; // min chars after separator (1+6 checksum)
+    uint8 internal constant MIN_ADDR_LEN = 26;
+    uint8 internal constant MAX_ADDR_LEN = 62;
+    uint8 internal constant MIN_BASE58_LEN = 26;
+    uint8 internal constant MAX_BASE58_LEN = 35;
+    uint8 internal constant BASE58_DECODE_MIN = 25; // 21 hash + 4 checksum
+    uint8 internal constant BASE58_HASH_LEN = 21;
+    uint8 internal constant BASE58_CHECKSUM_LEN = 4;
+    uint8 internal constant MIN_BECH32_SEP_REMAIN = 7; // min chars after separator (1+6 checksum)
 
     // Bech32 polymod targets
-    uint32 constant internal BECH32_CONST = 1;
-    uint32 constant internal BECH32M_CONST = 0x2bc830a3;
+    uint32 internal constant BECH32_CONST = 1;
+    uint32 internal constant BECH32M_CONST = 0x2bc830a3;
 
     // Base58 alphabet for encoding/decoding
-     bytes constant internal ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+    bytes internal constant ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
 
-     // Bech32 alphabet
-     bytes constant internal BECH32_ALPHABET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
-    
+    // Bech32 alphabet
+    bytes internal constant BECH32_ALPHABET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+
     // Bech32 generator polynomials
-    uint32 constant internal GEN0 = 0x3b6a57b2;
-    uint32 constant internal GEN1 = 0x26508e6d;
-    uint32 constant internal GEN2 = 0x1ea119fa;
-    uint32 constant internal GEN3 = 0x3d4233dd;
-    uint32 constant internal GEN4 = 0x2a1462b3;
+    uint32 internal constant GEN0 = 0x3b6a57b2;
+    uint32 internal constant GEN1 = 0x26508e6d;
+    uint32 internal constant GEN2 = 0x1ea119fa;
+    uint32 internal constant GEN3 = 0x3d4233dd;
+    uint32 internal constant GEN4 = 0x2a1462b3;
     // Packed address integrity magic (first two bytes of keccak prefix)
-    bytes2 constant internal PACKED_MAGIC = 0xF3A7;
-    
+    bytes2 internal constant PACKED_MAGIC = 0xF3A7;
+
     // Bitcoin address type identifiers
     enum AddressType {
-        P2PKH,      // 1...
-        P2SH,       // 3...
-        BECH32,     // bc1...
-        BECH32M,    // bc1... (Taproot)
+        P2PKH, // 1...
+        P2SH, // 3...
+        BECH32, // bc1...
+        BECH32M, // bc1... (Taproot)
         UNKNOWN
     }
-    
+
     // Packed address struct for efficient storage
     /**
      * @dev PackedAddress layout (lossless):
@@ -74,23 +74,23 @@ library FastPathBTC {
     struct PackedAddress {
         bytes32 part1; // First 32 bytes
         bytes32 part2; // Next 30 bytes (max 62 total)
-        uint8 len;     // Store the original length
+        uint8 len; // Store the original length
         AddressType addrType; // Address type for validation
     }
-    
+
     // ===== Address Round-Trip =====
-    
+
     /**
      * @notice Pack a Bitcoin address string into a PackedAddress
      * @param addr Bitcoin address as string (26-62 chars)
      * @return packed PackedAddress struct
      */
     function packAddress(bytes memory addr) internal pure returns (PackedAddress memory packed) {
-    /**
-     * @dev Pack a bytes address into `PackedAddress` without performing integrity checks.
-     * The integrity keccak prefix is computed on `unpackAddress` to avoid
-     * redundant work during packing and to keep pack cheap for on-path usage.
-     */
+        /**
+         * @dev Pack a bytes address into `PackedAddress` without performing integrity checks.
+         * The integrity keccak prefix is computed on `unpackAddress` to avoid
+         * redundant work during packing and to keep pack cheap for on-path usage.
+         */
         uint256 len = addr.length;
         if (len < MIN_ADDR_LEN || len > MAX_ADDR_LEN) revert InvalidAddressLength();
 
@@ -113,7 +113,7 @@ library FastPathBTC {
 
         return PackedAddress(p1, p2, uint8(len), addrType);
     }
-    
+
     /**
      * @notice Unpack a PackedAddress back to the original Bitcoin address string
      * @param packed PackedAddress struct
@@ -131,7 +131,8 @@ library FastPathBTC {
         // Integrity verification to detect corrupted or maliciously crafted packed data (M-01)
         // Compute a keccak over the canonical packed fields and compare the first
         // two bytes to `PACKED_MAGIC` to detect tampering.
-        bytes32 _computed = keccak256(bytes.concat(packed.part1, packed.part2, bytes1(packed.len), bytes1(uint8(packed.addrType))));
+        bytes32 _computed =
+            keccak256(bytes.concat(packed.part1, packed.part2, bytes1(packed.len), bytes1(uint8(packed.addrType))));
         if (bytes2(_computed) != PACKED_MAGIC) revert CorruptedPackedData();
 
         addr = new bytes(len);
@@ -148,9 +149,9 @@ library FastPathBTC {
             }
         }
     }
-    
+
     // ===== Address Validation =====
-    
+
     /**
      * @notice Validate a Bitcoin address with optional strict validation
      * @param addr Bitcoin address string
@@ -185,7 +186,7 @@ library FastPathBTC {
 
         revert InvalidAddressType();
     }
-    
+
     /**
      * @notice Detect Bitcoin address type from bytes
      * @param data Address bytes
@@ -194,9 +195,9 @@ library FastPathBTC {
     function detectAddressType(bytes memory data) internal pure returns (AddressType addrType) {
         return detectAddressTypeInternal(data);
     }
-    
+
     // ===== Base58 Validation =====
-    
+
     /**
      * @notice Validate Base58 encoded address (P2PKH/P2SH)
      * @param data Address bytes
@@ -226,7 +227,7 @@ library FastPathBTC {
 
         return true;
     }
-    
+
     /**
      * @notice Base58 decode implementation
      * @param data Base58 encoded data
@@ -234,7 +235,7 @@ library FastPathBTC {
      */
     function base58Decode(bytes memory data) internal pure returns (bytes memory decoded) {
         uint256[] memory digits = new uint256[](data.length);
-        
+
         // Convert characters to digits
         for (uint256 i = 0; i < data.length; i++) {
             digits[i] = base58CharToValue(data[i]);
@@ -242,11 +243,11 @@ library FastPathBTC {
                 revert InvalidBase58Char();
             }
         }
-        
+
         // Convert from base58
         uint256[] memory decodedArray = new uint256[](data.length * 733 / 1000 + 1); // log(58)/log(256)
         uint256 decodedLength = 1;
-        
+
         for (uint256 i = 0; i < digits.length; i++) {
             uint256 carry = digits[i];
             for (uint256 j = 0; j < decodedArray.length; j++) {
@@ -254,27 +255,27 @@ library FastPathBTC {
                 decodedArray[j] = carry % 256;
                 carry = carry / 256;
             }
-            
+
             while (carry > 0) {
                 decodedArray[decodedLength++] = carry % 256;
                 carry = carry / 256;
             }
         }
-        
+
         // Remove leading zeros
         uint256 leadingZeros;
         for (leadingZeros = 0; leadingZeros < data.length && data[leadingZeros] == ALPHABET[0]; leadingZeros++) {}
-        
+
         decoded = new bytes(decodedLength + leadingZeros);
         for (uint256 i = 0; i < leadingZeros; i++) {
             decoded[i] = 0;
         }
-        
+
         for (uint256 i = 0; i < decodedLength; i++) {
             decoded[leadingZeros + i] = bytes1(uint8(decodedArray[decodedLength - 1 - i]));
         }
     }
-    
+
     function base58CharToValue(bytes1 c) internal pure returns (uint256 value) {
         // Explicit mapping for Base58 characters to values. Implemented as
         // comparisons to avoid dynamic loops and to be gas-friendlier than
@@ -342,21 +343,26 @@ library FastPathBTC {
         if (b == 0x7A) return 59; // 'z'
         return 255;
     }
-    
+
     // ===== Bech32 Validation =====
-    
+
     /**
      * @notice Validate Bech32/Bech32m address
      * @param data Address bytes
      * @param isBech32m True for Bech32m, false for Bech32
      * @return isValid True if valid
      */
-    function validateBech32Address(bytes memory data, bool isBech32m, bool requireMainnet, bool revertOnError) internal pure returns (bool isValid) {
+    function validateBech32Address(bytes memory data, bool isBech32m, bool requireMainnet, bool revertOnError)
+        internal
+        pure
+        returns (bool isValid)
+    {
         // Find separator '1'
         uint256 sepPos = 0;
         uint256 dlen = data.length;
         for (uint256 i = 0; i < dlen; i++) {
-            if (data[i] == bytes1(0x31)) { // '1'
+            if (data[i] == bytes1(0x31)) {
+                // '1'
                 sepPos = i;
                 break;
             }
@@ -395,7 +401,7 @@ library FastPathBTC {
                 return false;
             }
         }
-        
+
         // Data part (after separator)
         uint256 dpLen = dlen - hrpLen - 1;
         bytes memory dataPart = new bytes(dpLen);
@@ -413,7 +419,7 @@ library FastPathBTC {
         // Verify checksum
         return verifyChecksum(hrp, values, isBech32m);
     }
-    
+
     /**
      * @notice Verify Bech32/Bech32m checksum
      * @param hrp Human-readable part
@@ -421,10 +427,14 @@ library FastPathBTC {
      * @param isBech32m True for Bech32m
      * @return isValid True if checksum valid
      */
-    function verifyChecksum(bytes memory hrp, uint8[] memory values, bool isBech32m) internal pure returns (bool isValid) {
+    function verifyChecksum(bytes memory hrp, uint8[] memory values, bool isBech32m)
+        internal
+        pure
+        returns (bool isValid)
+    {
         // Expand HRP
         uint8[] memory expanded = expandHrp(hrp);
-        
+
         // Combine with values
         uint8[] memory combined = new uint8[](expanded.length + values.length);
         for (uint256 i = 0; i < expanded.length; i++) {
@@ -433,14 +443,14 @@ library FastPathBTC {
         for (uint256 i = 0; i < values.length; i++) {
             combined[expanded.length + i] = values[i];
         }
-        
+
         // Calculate polymod and compare to target constant
         uint32 target = isBech32m ? BECH32M_CONST : BECH32_CONST;
         uint32 v = polymod(combined);
 
         return v == target;
     }
-    
+
     /**
      * @notice Expand HRP for checksum calculation
      * @param hrp Human-readable part
@@ -448,14 +458,14 @@ library FastPathBTC {
      */
     function expandHrp(bytes memory hrp) internal pure returns (uint8[] memory expanded) {
         expanded = new uint8[](hrp.length * 2 + 1);
-        
+
         for (uint256 i = 0; i < hrp.length; i++) {
             expanded[i] = uint8(hrp[i]) >> 5;
             expanded[hrp.length + 1 + i] = uint8(hrp[i]) & 31;
         }
         expanded[hrp.length] = 0; // Separator
     }
-    
+
     /**
      * @notice Bech32 polymod function
      * @param values 5-bit values
@@ -488,7 +498,7 @@ library FastPathBTC {
         }
         return chk;
     }
-    
+
     // Full Bech32 character mapping for validation
     function charToBech32Value(bytes1 c) internal pure returns (uint8) {
         // Accept lowercase or uppercase letters, but caller enforces no mixed-case
@@ -527,14 +537,14 @@ library FastPathBTC {
         if (c == 0x6c || c == 0x4c) return 31; // l L
         return 255; // Invalid
     }
-    
+
     // ===== Helper Functions =====
-    
+
     // toETHHex removed: this placeholder provided no functionality and
     // has been intentionally removed to avoid dead code. If conversion
     // from Bitcoin address to Ethereum-style hex is needed, implement
     // a standalone utility that clearly documents expected semantics.
-    
+
     /**
      * @notice Get address type as string
      * @param addrType Address type enum
@@ -547,7 +557,7 @@ library FastPathBTC {
         if (addrType == AddressType.BECH32M) return "Bech32m";
         return "UNKNOWN";
     }
-    
+
     // ===== Helpers =====
 
     function sliceBytes(bytes memory data_, uint256 start_, uint256 len_) internal pure returns (bytes memory) {
@@ -579,7 +589,7 @@ library FastPathBTC {
     }
 
     // ===== Utility Functions =====
-    
+
     /**
      * @notice SHA256 hash (using precompile)
      * @param data Input data

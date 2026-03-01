@@ -107,9 +107,9 @@ contract BitcoinNameService {
     uint256 public constant GRACE_PERIOD = 30 days; // After expiry, original owner can still renew
     uint256 public constant RECLAIM_PERIOD = 14 days; // After grace, previous owner has priority to re-register
     uint256 public constant MAX_TEXT_KEYS = 20; // Cap text records per name to bound release() gas
-    uint256 public constant MAX_ETH_FEE = 1 ether;              // Cap on ETH fee changes (M3)
-    uint256 public constant MAX_TOKEN_FEE = 1_000_000_000;       // Cap on ERC-20 token fee (1,000 WBTC at 8 decimals)
-    uint256 public constant MAX_BITID_FEE = 10_000_00000000;     // 10,000 BitID cap (8 decimals) (M3)
+    uint256 public constant MAX_ETH_FEE = 1 ether; // Cap on ETH fee changes (M3)
+    uint256 public constant MAX_TOKEN_FEE = 1_000_000_000; // Cap on ERC-20 token fee (1,000 WBTC at 8 decimals)
+    uint256 public constant MAX_BITID_FEE = 10_000_00000000; // 10,000 BitID cap (8 decimals) (M3)
 
     /// @notice Contract version for on-chain verification
     string public constant VERSION = "1.0.0";
@@ -151,7 +151,7 @@ contract BitcoinNameService {
 
     /// @notice Forward resolution: nameHash → registration record
     struct NameRecord {
-        bytes20 hash160;       // The Bitcoin identity this name points to
+        bytes20 hash160; // The Bitcoin identity this name points to
         uint256 registeredAt;
         uint256 expiresAt;
         bool exists;
@@ -363,7 +363,7 @@ contract BitcoinNameService {
         // Refund excess ETH (before external reward call — checks-effects-interactions)
         uint256 excess = msg.value - renewalFee;
         if (excess > 0) {
-            (bool success, ) = msg.sender.call{value: excess}("");
+            (bool success,) = msg.sender.call{value: excess}("");
             if (!success) revert RefundFailed();
         }
 
@@ -546,15 +546,19 @@ contract BitcoinNameService {
      * @notice Full resolution: name → all data in one call
      * @param name The human-readable name
      */
-    function resolveAll(string calldata name) external view returns (
-        address evmAddress,
-        bytes20 hash160,
-        uint256 registeredAt,
-        uint256 expiresAt,
-        string memory avatar,
-        string memory url,
-        string memory description
-    ) {
+    function resolveAll(string calldata name)
+        external
+        view
+        returns (
+            address evmAddress,
+            bytes20 hash160,
+            uint256 registeredAt,
+            uint256 expiresAt,
+            string memory avatar,
+            string memory url,
+            string memory description
+        )
+    {
         bytes32 nameHash = keccak256(bytes(name));
         NameRecord storage record = _names[nameHash];
         if (!record.exists) revert NameNotRegistered();
@@ -599,9 +603,9 @@ contract BitcoinNameService {
         for (uint256 i = 0; i < b.length; i++) {
             bytes1 c = b[i];
             bool isHyphen = (c == 0x2d);
-            bool valid = (c >= 0x61 && c <= 0x7a) || // a-z
-                         (c >= 0x30 && c <= 0x39) || // 0-9
-                         isHyphen;                     // hyphen
+            bool valid = (c >= 0x61 && c <= 0x7a) // a-z
+                || (c >= 0x30 && c <= 0x39) // 0-9
+                || isHyphen; // hyphen
             if (!valid) return (false, "Invalid character");
             if (isHyphen && prevHyphen) return (false, "Consecutive hyphens");
             prevHyphen = isHyphen;
@@ -613,7 +617,9 @@ contract BitcoinNameService {
 
         if (!record.exists) return (true, "Available");
         if (block.timestamp > record.expiresAt + GRACE_PERIOD + RECLAIM_PERIOD) return (true, "Expired");
-        if (block.timestamp > record.expiresAt + GRACE_PERIOD) return (false, "In reclaim window (previous owner priority)");
+        if (block.timestamp > record.expiresAt + GRACE_PERIOD) {
+            return (false, "In reclaim window (previous owner priority)");
+        }
         if (block.timestamp > record.expiresAt) return (false, "In grace period");
         return (false, "Taken");
     }
@@ -659,7 +665,7 @@ contract BitcoinNameService {
     function withdrawFees() external onlyOwner nonReentrant {
         uint256 balance = address(this).balance;
         if (balance == 0) revert NoFeesToWithdraw();
-        (bool success, ) = owner.call{value: balance}("");
+        (bool success,) = owner.call{value: balance}("");
         if (!success) revert TransferFailed();
     }
 
@@ -698,6 +704,7 @@ contract BitcoinNameService {
         if (balance == 0) revert NoFeesToWithdraw();
         SafeERC20.safeTransfer(IERC20(address(feeToken)), owner, balance);
     }
+
     function pause() external onlyOwner {
         paused = true;
         emit Paused(msg.sender);
@@ -760,11 +767,11 @@ contract BitcoinNameService {
      * @param subLabel The subdomain label (e.g., "wallet" → wallet.satoshi.btc)
      * @param hash160 The Bitcoin hash160 identity for the subdomain
      */
-    function registerSubdomain(
-        string calldata parentName,
-        string calldata subLabel,
-        bytes20 hash160
-    ) external whenNotPaused nonReentrant {
+    function registerSubdomain(string calldata parentName, string calldata subLabel, bytes20 hash160)
+        external
+        whenNotPaused
+        nonReentrant
+    {
         if (hash160 == bytes20(0)) revert ZeroHash160();
 
         bytes32 parentHash = keccak256(bytes(parentName));
@@ -797,9 +804,10 @@ contract BitcoinNameService {
             bytes32 existingParentHash = _subdomainParent[hash160];
             bytes32 existingSubHash = keccak256(bytes(_subdomainLabel[hash160]));
             NameRecord storage existingParent = _names[existingParentHash];
-            if (existingParent.exists &&
-                block.timestamp <= existingParent.expiresAt &&
-                _subdomainParentRegisteredAt[existingParentHash][existingSubHash] == existingParent.registeredAt) {
+            if (
+                existingParent.exists && block.timestamp <= existingParent.expiresAt
+                    && _subdomainParentRegisteredAt[existingParentHash][existingSubHash] == existingParent.registeredAt
+            ) {
                 revert Hash160AlreadyHasSubdomain();
             }
         }
@@ -849,10 +857,11 @@ contract BitcoinNameService {
      * @return evmAddress The EVM address of the subdomain's hash160
      * @return hash160 The subdomain's Bitcoin hash160
      */
-    function resolveSubdomain(
-        string calldata parentName,
-        string calldata subLabel
-    ) external view returns (address evmAddress, bytes20 hash160) {
+    function resolveSubdomain(string calldata parentName, string calldata subLabel)
+        external
+        view
+        returns (address evmAddress, bytes20 hash160)
+    {
         bytes32 parentHash = keccak256(bytes(parentName));
         NameRecord storage parent = _names[parentHash];
         if (!parent.exists) revert NameNotRegistered();
@@ -878,7 +887,7 @@ contract BitcoinNameService {
     function _refundExcess() internal {
         uint256 excess = msg.value - registrationFee;
         if (excess > 0) {
-            (bool success, ) = msg.sender.call{value: excess}("");
+            (bool success,) = msg.sender.call{value: excess}("");
             if (!success) revert RefundFailed();
         }
     }
@@ -896,7 +905,7 @@ contract BitcoinNameService {
 
             bool isLower = (c >= 0x61 && c <= 0x7a); // a-z
             bool isDigit = (c >= 0x30 && c <= 0x39); // 0-9
-            bool isHyphen = (c == 0x2d);               // -
+            bool isHyphen = (c == 0x2d); // -
 
             if (!isLower && !isDigit && !isHyphen) revert InvalidCharacter(i);
 
@@ -987,12 +996,8 @@ contract BitcoinNameService {
 
         // Register
         uint256 expiresAt = block.timestamp + REGISTRATION_PERIOD;
-        _names[nameHash] = NameRecord({
-            hash160: hash160,
-            registeredAt: block.timestamp,
-            expiresAt: expiresAt,
-            exists: true
-        });
+        _names[nameHash] =
+            NameRecord({hash160: hash160, registeredAt: block.timestamp, expiresAt: expiresAt, exists: true});
         _reverse[hash160] = name;
         _nameStrings[nameHash] = name;
 

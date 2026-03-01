@@ -12,12 +12,12 @@ interface IBitIDRewardDistributor {
 
 /**
  * @title BitcoinGateway v.1.4.0
- * @author FastPath-Hash160 by - Emiliano Solazzi 
+ * @author FastPath-Hash160 by - Emiliano Solazzi
  * @notice On-chain registry for Bitcoin payment intents with proof recording.
  * @dev Bitcoin sends happen peer-to-peer on the Bitcoin network. This contract records the
  *      intent (fromBtcAddress, toBtcAddress, sats) and the fulfillment proof (btcTxid, pubkey).
  *      No ETH is locked. The registered user pays a small ETH fee at fulfillment time that goes to protocol.
- * 
+ *
  * Security considerations:
  * - All external calls use checks-effects-interactions (CEI) pattern
  * - Zero address validation on all address inputs
@@ -33,55 +33,55 @@ contract BitcoinGateway is ReentrancyGuard {
 
     /// @notice Thrown when caller is not the contract owner
     error NotOwner();
-    
+
     /// @notice Thrown when contract is paused
     error ContractPaused();
-    
+
     /// @notice Thrown when amount is zero
     error ZeroAmount();
-    
+
     /// @notice Thrown when from BTC address is empty
     error EmptyFromAddress();
-    
+
     /// @notice Thrown when to BTC address is empty
     error EmptyToAddress();
-    
+
     /// @notice Thrown when request ID is invalid
     error InvalidRequest();
-    
+
     /// @notice Thrown when payment is already fulfilled
     error AlreadyFulfilled();
-    
+
     /// @notice Thrown when BTC txid is invalid
     error InvalidTxid();
-    
+
     /// @notice Thrown when proof length is not 64 bytes
     error InvalidProofLength();
-    
+
     /// @notice Thrown when fingerprint is already registered
     error FingerprintAlreadyRegistered();
-    
+
     /// @notice Thrown when user is already registered
     error UserAlreadyRegistered();
-    
+
     /// @notice Thrown when user is not registered
     error UserNotRegistered();
-    
+
     /// @notice Thrown when address is blacklisted
     error AddressBlacklisted();
-    
+
     /// @notice Thrown when BTC amount is below dust limit
     error BtcAmountBelowDust();
-    
+
     /// @notice Thrown when address is zero
     error ZeroAddress();
-    
+
     /// @notice Thrown when ETH transfer fails
     error TransferFailed();
-    
+
     /// @notice Thrown when insufficient protocol fees
     error InsufficientFees();
-    
+
     /// @notice Thrown when fee recipient is zero
     error ZeroFeeRecipient();
 
@@ -97,13 +97,13 @@ contract BitcoinGateway is ReentrancyGuard {
 
     /// @notice Contract owner with admin privileges
     address public owner;
-    
+
     /// @notice Address that receives protocol fees
     address public feeRecipient;
-    
+
     /// @notice Total payment requests created
     uint256 public requestCount;
-    
+
     /// @notice Contract pause state
     bool public paused;
 
@@ -112,10 +112,10 @@ contract BitcoinGateway is ReentrancyGuard {
 
     /// @notice Fingerprint to registered user address mapping
     mapping(bytes32 fingerprint => address userAddress) public fingerprintToUser;
-    
+
     /// @notice Registered user address to fingerprint mapping
     mapping(address userAddress => bytes32 fingerprint) public userToFingerprint;
-    
+
     /// @notice Request ID to the user who submitted proof (recorded at fulfillment)
     mapping(uint256 requestId => address prover) public requestToProver;
 
@@ -157,14 +157,14 @@ contract BitcoinGateway is ReentrancyGuard {
      *      Slot 3+: strings (dynamic)
      */
     struct PaymentRequest {
-        address requester;      // 20 bytes |
-        bool fulfilled;         //  1 byte  | slot 0 (29 bytes packed)
-        uint64 timestamp;       //  8 bytes |
-        uint256 amountSats;     // slot 1
-        bytes32 btcTxid;        // slot 2
-        string fromBtcAddress;  // slot 3+
-        string toBtcAddress;    // slot 4+
-        string memo;            // slot 5+
+        address requester; // 20 bytes |
+        bool fulfilled; //  1 byte  | slot 0 (29 bytes packed)
+        uint64 timestamp; //  8 bytes |
+        uint256 amountSats; // slot 1
+        bytes32 btcTxid; // slot 2
+        string fromBtcAddress; // slot 3+
+        string toBtcAddress; // slot 4+
+        string memo; // slot 5+
     }
 
     // ══════════════════════════════════════════════════════════════════════════════
@@ -186,7 +186,7 @@ contract BitcoinGateway is ReentrancyGuard {
         uint256 amountSats,
         address requester
     );
-    
+
     /// @notice Emitted when a Bitcoin payment is completed
     event BitcoinPaymentCompleted(
         uint256 indexed requestId,
@@ -195,33 +195,28 @@ contract BitcoinGateway is ReentrancyGuard {
         string toBtcAddress,
         uint256 amountSats
     );
-    
+
     /// @notice Emitted with proof of Bitcoin transaction
-    event BitcoinTransactionProof(
-        uint256 indexed requestId,
-        bytes publicKey,
-        bytes32 indexed btcTxid,
-        bytes proof
-    );
-    
+    event BitcoinTransactionProof(uint256 indexed requestId, bytes publicKey, bytes32 indexed btcTxid, bytes proof);
+
     /// @notice Emitted when pause state changes
     event PauseStateChanged(bool indexed isPaused);
-    
+
     /// @notice Emitted when ownership is transferred
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
-    
+
     /// @notice Emitted when a user registers their machine
     event UserRegistered(address indexed userAddress, bytes32 indexed fingerprint);
-    
+
     /// @notice Emitted when a user unregisters their machine
     event UserUnregistered(address indexed userAddress, bytes32 indexed fingerprint);
-    
+
     /// @notice Emitted when blacklist status changes
     event AddressBlacklistedUpdated(address indexed addr, bool indexed isBlacklisted);
-    
+
     /// @notice Emitted when protocol fees are withdrawn
     event ProtocolFeesWithdrawn(address indexed recipient, uint256 amount);
-    
+
     /// @notice Emitted when fee recipient is updated
     event FeeRecipientUpdated(address indexed oldRecipient, address indexed newRecipient);
 
@@ -267,7 +262,7 @@ contract BitcoinGateway is ReentrancyGuard {
         feeRecipient = initialFeeRecipient;
         owner = msg.sender;
         proofFee = MIN_PROOF_FEE;
-        
+
         emit OwnershipTransferred(address(0), msg.sender);
         emit FeeRecipientUpdated(address(0), initialFeeRecipient);
         emit ProofFeeUpdated(0, MIN_PROOF_FEE);
@@ -293,18 +288,8 @@ contract BitcoinGateway is ReentrancyGuard {
         string calldata toBtcAddress,
         uint256 amountSats,
         string calldata memo
-    )
-        external
-        whenNotPaused
-        notBlacklisted
-        returns (uint256 requestId)
-    {
-        return _sendBitcoinInternal(
-            fromBtcAddress,
-            toBtcAddress,
-            amountSats,
-            memo
-        );
+    ) external whenNotPaused notBlacklisted returns (uint256 requestId) {
+        return _sendBitcoinInternal(fromBtcAddress, toBtcAddress, amountSats, memo);
     }
 
     /**
@@ -315,36 +300,26 @@ contract BitcoinGateway is ReentrancyGuard {
         string calldata toBtcAddress,
         uint256 amountSats,
         string calldata memo
-    )
-        internal
-        returns (uint256 requestId)
-    {
+    ) internal returns (uint256 requestId) {
         _validateSendInputs(fromBtcAddress, toBtcAddress, amountSats);
 
         requestId = requestCount;
-        unchecked { 
-            requestCount = requestId + 1; 
+        unchecked {
+            requestCount = requestId + 1;
         }
 
         _storeRequest(requestId, fromBtcAddress, toBtcAddress, amountSats, memo);
-        
-        emit BitcoinPaymentRequested(
-            requestId,
-            fromBtcAddress,
-            toBtcAddress,
-            amountSats,
-            msg.sender
-        );
+
+        emit BitcoinPaymentRequested(requestId, fromBtcAddress, toBtcAddress, amountSats, msg.sender);
     }
 
     /**
      * @dev Validate send inputs including dust limit
      */
-    function _validateSendInputs(
-        string calldata fromBtcAddress,
-        string calldata toBtcAddress,
-        uint256 amountSats
-    ) private pure {
+    function _validateSendInputs(string calldata fromBtcAddress, string calldata toBtcAddress, uint256 amountSats)
+        private
+        pure
+    {
         if (bytes(fromBtcAddress).length == 0) revert EmptyFromAddress();
         if (bytes(toBtcAddress).length == 0) revert EmptyToAddress();
         if (amountSats < _MIN_BTC_DUST) revert BtcAmountBelowDust();
@@ -383,12 +358,7 @@ contract BitcoinGateway is ReentrancyGuard {
      * @param publicKey Public key of the signing user
      * @param proof Cryptographic proof (64 bytes)
      */
-    function submitBitcoinProof(
-        uint256 requestId,
-        bytes32 btcTxid,
-        bytes calldata publicKey,
-        bytes calldata proof
-    )
+    function submitBitcoinProof(uint256 requestId, bytes32 btcTxid, bytes calldata publicKey, bytes calldata proof)
         external
         payable
         nonReentrant
@@ -417,7 +387,7 @@ contract BitcoinGateway is ReentrancyGuard {
         // Validation
         uint256 _requestCount = requestCount;
         if (requestId >= _requestCount) revert InvalidRequest();
-        
+
         PaymentRequest storage req = requests[requestId];
         if (req.fulfilled) revert AlreadyFulfilled();
         if (btcTxid == bytes32(0)) revert InvalidTxid();
@@ -426,7 +396,7 @@ contract BitcoinGateway is ReentrancyGuard {
         // Effects
         req.fulfilled = true;
         req.btcTxid = btcTxid;
-        
+
         // Record the user who submitted proof for audit trail
         requestToProver[requestId] = prover;
 
@@ -435,9 +405,7 @@ contract BitcoinGateway is ReentrancyGuard {
             totalProtocolFeesEth += msg.value;
         }
 
-        emit BitcoinPaymentCompleted(
-            requestId, btcTxid, req.fromBtcAddress, req.toBtcAddress, req.amountSats
-        );
+        emit BitcoinPaymentCompleted(requestId, btcTxid, req.fromBtcAddress, req.toBtcAddress, req.amountSats);
         emit BitcoinTransactionProof(requestId, publicKey, btcTxid, proof);
 
         // Mint BitID reward to the prover — non-blocking: if distributor is not set
@@ -452,7 +420,7 @@ contract BitcoinGateway is ReentrancyGuard {
      * @dev Safe ETH transfer with custom error
      */
     function _safeTransferETH(address to, uint256 amount) internal {
-        (bool success, ) = to.call{value: amount}("");
+        (bool success,) = to.call{value: amount}("");
         if (!success) revert TransferFailed();
     }
 
@@ -602,11 +570,11 @@ contract BitcoinGateway is ReentrancyGuard {
     function withdrawProtocolFees(uint256 amount) external nonReentrant onlyOwner {
         uint256 _totalFees = totalProtocolFeesEth;
         if (amount > _totalFees) revert InsufficientFees();
-        
+
         unchecked {
             totalProtocolFeesEth = _totalFees - amount;
         }
-        
+
         address _recipient = feeRecipient;
         _safeTransferETH(_recipient, amount);
 
@@ -622,11 +590,7 @@ contract BitcoinGateway is ReentrancyGuard {
      * @param requestId ID of the request
      * @return request PaymentRequest struct
      */
-    function getPaymentRequest(uint256 requestId)
-        external
-        view
-        returns (PaymentRequest memory request)
-    {
+    function getPaymentRequest(uint256 requestId) external view returns (PaymentRequest memory request) {
         if (requestId >= requestCount) revert InvalidRequest();
         return requests[requestId];
     }
@@ -637,11 +601,7 @@ contract BitcoinGateway is ReentrancyGuard {
      * @return fulfilled Whether the payment is fulfilled
      * @return btcTxid Bitcoin transaction ID (bytes32(0) if not fulfilled)
      */
-    function getPaymentStatus(uint256 requestId)
-        external
-        view
-        returns (bool fulfilled, bytes32 btcTxid)
-    {
+    function getPaymentStatus(uint256 requestId) external view returns (bool fulfilled, bytes32 btcTxid) {
         if (requestId >= requestCount) {
             return (false, bytes32(0));
         }
@@ -665,6 +625,4 @@ contract BitcoinGateway is ReentrancyGuard {
     function getMinBtcDust() external pure returns (uint256 dustLimit) {
         return _MIN_BTC_DUST;
     }
-
-
 }

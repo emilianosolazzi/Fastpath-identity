@@ -56,13 +56,15 @@ contract VaultV2Handler is Test {
     }
 
     function _domainSeparator() internal view returns (bytes32) {
-        return keccak256(abi.encode(
-            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-            keccak256("FastPathAttestation"),
-            keccak256("1"),
-            block.chainid,
-            address(verifier)
-        ));
+        return keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("FastPathAttestation"),
+                keccak256("1"),
+                block.chainid,
+                address(verifier)
+            )
+        );
     }
 
     function attestBalance(uint256 actorIdx, uint256 balanceSats) external {
@@ -75,14 +77,18 @@ contract VaultV2Handler is Test {
 
         string memory btcAddr = string(abi.encodePacked("bc1q_actor_", vm.toString(actorIdx)));
 
-        bytes32 structHash = keccak256(abi.encode(
-            keccak256("BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"),
-            actor,
-            keccak256(bytes(btcAddr)),
-            balanceSats,
-            ts,
-            nonce
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"
+                ),
+                actor,
+                keccak256(bytes(btcAddr)),
+                balanceSats,
+                ts,
+                nonce
+            )
+        );
 
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
@@ -162,11 +168,7 @@ contract InvariantVaultV2Test is Test {
 
     /// @notice INV-3: DemoUSD supply must always equal totalBorrowed
     function invariant_DemoUsdSupplyEqualsTotalBorrowed() public view {
-        assertEq(
-            demoUSD.totalSupply(),
-            vault.totalBorrowed(),
-            "INV-3: dUSD supply != totalBorrowed"
-        );
+        assertEq(demoUSD.totalSupply(), vault.totalBorrowed(), "INV-3: dUSD supply != totalBorrowed");
     }
 
     /// @notice INV-1 + INV-2: Aggregate tracking matches sum of positions
@@ -216,25 +218,31 @@ contract FuzzTests is Test {
     }
 
     function _domainSeparator() internal view returns (bytes32) {
-        return keccak256(abi.encode(
-            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-            keccak256("FastPathAttestation"),
-            keccak256("1"),
-            block.chainid,
-            address(verifier)
-        ));
+        return keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("FastPathAttestation"),
+                keccak256("1"),
+                block.chainid,
+                address(verifier)
+            )
+        );
     }
 
     function _attestAndBorrow(uint256 sats, uint256 amount) internal {
         uint256 ts = block.timestamp;
-        bytes32 structHash = keccak256(abi.encode(
-            keccak256("BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"),
-            user,
-            keccak256(bytes("bc1qfuzz")),
-            sats,
-            ts,
-            uint256(1)
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"
+                ),
+                user,
+                keccak256(bytes("bc1qfuzz")),
+                sats,
+                ts,
+                uint256(1)
+            )
+        );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
 
@@ -248,8 +256,8 @@ contract FuzzTests is Test {
     // ── FUZZ-1: Borrow→Repay round trip ──
 
     function testFuzz_BorrowRepayRoundTrip(uint256 sats, uint256 borrowPct) public {
-        sats = bound(sats, 1e6, 21_000_000e8);      // 0.01 BTC to 21M BTC
-        borrowPct = bound(borrowPct, 1, 100);        // 1-100%
+        sats = bound(sats, 1e6, 21_000_000e8); // 0.01 BTC to 21M BTC
+        borrowPct = bound(borrowPct, 1, 100); // 1-100%
 
         uint256 maxBorrow = (sats * 90_000e8 / 1e8) * 5000 / 10000;
         if (maxBorrow == 0) return;
@@ -276,14 +284,18 @@ contract FuzzTests is Test {
         sats = bound(sats, 1, 21_000_000e8);
 
         uint256 ts = block.timestamp;
-        bytes32 structHash = keccak256(abi.encode(
-            keccak256("BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"),
-            user,
-            keccak256(bytes("bc1qfuzz")),
-            sats,
-            ts,
-            uint256(1)
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"
+                ),
+                user,
+                keccak256(bytes("bc1qfuzz")),
+                sats,
+                ts,
+                uint256(1)
+            )
+        );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
 
@@ -303,7 +315,7 @@ contract FuzzTests is Test {
         vm.prank(user);
         uint256 reqId = gw.sendBitcoin("bc1qfrom", "bc1qto", sats, "memo");
 
-        (address req,,uint64 ts, uint256 amt,,,,) = gw.requests(reqId);
+        (address req,, uint64 ts, uint256 amt,,,,) = gw.requests(reqId);
         assertEq(req, user);
         assertEq(amt, sats);
         assertTrue(ts > 0);
@@ -355,14 +367,18 @@ contract FuzzTests is Test {
         vault.updateBtcPrice(price);
 
         uint256 ts = block.timestamp;
-        bytes32 structHash = keccak256(abi.encode(
-            keccak256("BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"),
-            user,
-            keccak256(bytes("bc1qfuzz")),
-            sats,
-            ts,
-            uint256(1)
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"
+                ),
+                user,
+                keccak256(bytes("bc1qfuzz")),
+                sats,
+                ts,
+                uint256(1)
+            )
+        );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", _domainSeparator(), structHash));
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerPk, digest);
 

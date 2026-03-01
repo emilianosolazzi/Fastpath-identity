@@ -30,7 +30,7 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
     using ECDSA for bytes32;
 
     // ── State ──────────────────────────────────────────────────
-    
+
     /// @notice The address whose signatures we trust (FastPath API signer)
     address public trustedSigner;
 
@@ -44,7 +44,7 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
     mapping(address => bool) public trustedCallers;
 
     // ── EIP-712 Type Hashes ────────────────────────────────────
-    
+
     bytes32 private constant BALANCE_TYPEHASH = keccak256(
         "BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"
     );
@@ -54,11 +54,13 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
     );
 
     // ── Events ─────────────────────────────────────────────────
-    
+
     event SignerUpdated(address indexed oldSigner, address indexed newSigner);
     event MaxAgeUpdated(uint256 oldMaxAge, uint256 newMaxAge);
     event BalanceVerified(address indexed evmAddress, string btcAddress, uint256 balanceSats, uint256 nonce);
-    event OwnershipVerified(address indexed evmAddress, string btcAddress, string utxoTxid, uint32 utxoIndex, uint256 nonce);
+    event OwnershipVerified(
+        address indexed evmAddress, string btcAddress, string utxoTxid, uint32 utxoIndex, uint256 nonce
+    );
     event TrustedCallerUpdated(address indexed caller, bool trusted);
 
     // ── Errors ─────────────────────────────────────────────────
@@ -74,10 +76,7 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
 
     /// @param _trustedSigner The FastPath API attestation signer address
     ///        Get this from: GET https://api.nativebtc.org/v1/attest/signer
-    constructor(address _trustedSigner) 
-        Ownable(msg.sender) 
-        EIP712("FastPathAttestation", "1") 
-    {
+    constructor(address _trustedSigner) Ownable(msg.sender) EIP712("FastPathAttestation", "1") {
         if (_trustedSigner == address(0)) revert ZeroAddress();
         trustedSigner = _trustedSigner;
     }
@@ -133,14 +132,9 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
         if (usedNonces[nonce]) revert NonceAlreadyUsed();
 
         // Build EIP-712 struct hash
-        bytes32 structHash = keccak256(abi.encode(
-            BALANCE_TYPEHASH,
-            evmAddress,
-            keccak256(bytes(btcAddress)),
-            balanceSats,
-            timestamp,
-            nonce
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(BALANCE_TYPEHASH, evmAddress, keccak256(bytes(btcAddress)), balanceSats, timestamp, nonce)
+        );
 
         // Build full EIP-712 digest
         bytes32 digest = _hashTypedDataV4(structHash);
@@ -183,16 +177,18 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
         if (block.timestamp > timestamp + maxAge) revert AttestationExpired();
         if (usedNonces[nonce]) revert NonceAlreadyUsed();
 
-        bytes32 structHash = keccak256(abi.encode(
-            OWNERSHIP_TYPEHASH,
-            evmAddress,
-            keccak256(bytes(btcAddress)),
-            keccak256(bytes(utxoTxid)),
-            utxoIndex,
-            amountSats,
-            timestamp,
-            nonce
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(
+                OWNERSHIP_TYPEHASH,
+                evmAddress,
+                keccak256(bytes(btcAddress)),
+                keccak256(bytes(utxoTxid)),
+                utxoIndex,
+                amountSats,
+                timestamp,
+                nonce
+            )
+        );
 
         bytes32 digest = _hashTypedDataV4(structHash);
         address recovered = ECDSA.recover(digest, signature);
@@ -216,14 +212,9 @@ contract FastpathAttestationVerifier is Ownable, EIP712 {
         uint256 nonce,
         bytes calldata signature
     ) external view returns (bool valid, address recovered) {
-        bytes32 structHash = keccak256(abi.encode(
-            BALANCE_TYPEHASH,
-            evmAddress,
-            keccak256(bytes(btcAddress)),
-            balanceSats,
-            timestamp,
-            nonce
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(BALANCE_TYPEHASH, evmAddress, keccak256(bytes(btcAddress)), balanceSats, timestamp, nonce)
+        );
 
         bytes32 digest = _hashTypedDataV4(structHash);
         recovered = ECDSA.recover(digest, signature);

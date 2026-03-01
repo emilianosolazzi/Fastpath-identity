@@ -15,12 +15,12 @@ import "contracts/Bitcoingateway.sol";
  */
 contract BitcoinGatewayReentrancyTest is Test {
     BitcoinGateway public gateway;
-    
+
     address public owner = address(this);
     address public registeredUser = address(0xBEEF);
     address public feeRecipient = address(0xFEED);
     address public victim = address(0xDEAD);
-    
+
     function setUp() public {
         gateway = new BitcoinGateway(feeRecipient);
         vm.deal(victim, 100 ether);
@@ -29,7 +29,7 @@ contract BitcoinGatewayReentrancyTest is Test {
         vm.prank(registeredUser);
         gateway.registerUser(bytes32(uint256(0xCC)));
     }
-    
+
     // ==========================================
     // TEST: Plain ETH rejected (no receive function)
     // ==========================================

@@ -3,8 +3,8 @@ pragma solidity 0.8.30;
 
 /**
  * @title CrossChainProofVerifier
- * @notice Verifies Bitcoin → EVM identity proofs 
-using the BitcoinGateway + FastPathIdentity stack
+ * @notice Verifies Bitcoin → EVM identity proofs
+ * using the BitcoinGateway + FastPathIdentity stack
  *
  *   Proof chain:
  *     Bitcoin witness signature
@@ -25,20 +25,18 @@ interface IFastPathIdentity {
 interface IBitcoinGateway {
     struct PaymentRequest {
         address requester;
-        bool    fulfilled;
-        uint64  timestamp;
+        bool fulfilled;
+        uint64 timestamp;
         uint256 amountSats;
         bytes32 btcTxid;
-        string  fromBtcAddress;
-        string  toBtcAddress;
-        string  memo;
+        string fromBtcAddress;
+        string toBtcAddress;
+        string memo;
     }
 
-    function getPaymentRequest(uint256 requestId)
-        external view returns (PaymentRequest memory);
+    function getPaymentRequest(uint256 requestId) external view returns (PaymentRequest memory);
 
-    function getPaymentStatus(uint256 requestId)
-        external view returns (bool fulfilled, bytes32 btcTxid);
+    function getPaymentStatus(uint256 requestId) external view returns (bool fulfilled, bytes32 btcTxid);
 
     function requestCount() external view returns (uint256);
 }
@@ -46,7 +44,6 @@ interface IBitcoinGateway {
 // ─── Contract ────────────────────────────────────────────────────────────────
 
 contract CrossChainProofVerifier {
-
     // ── Errors ───────────────────────────────────────────────────────────────
     error InvalidPubkeyLength();
     error RequestNotFulfilled();
@@ -55,19 +52,16 @@ contract CrossChainProofVerifier {
 
     // ── Events ───────────────────────────────────────────────────────────────
     event ProofVerified(
-        uint256 indexed requestId,
-        bytes32 indexed btcTxid,
-        bytes20 indexed signerHash160,
-        address signerEvm
+        uint256 indexed requestId, bytes32 indexed btcTxid, bytes20 indexed signerHash160, address signerEvm
     );
 
     // ── Immutables ───────────────────────────────────────────────────────────
-    IBitcoinGateway   public immutable gateway;
+    IBitcoinGateway public immutable gateway;
     IFastPathIdentity public immutable identity;
 
     // ── Constructor ──────────────────────────────────────────────────────────
     constructor(address _gateway, address _identity) {
-        gateway  = IBitcoinGateway(_gateway);
+        gateway = IBitcoinGateway(_gateway);
         identity = IFastPathIdentity(_identity);
     }
 
@@ -97,8 +91,8 @@ contract CrossChainProofVerifier {
         view
         returns (address evmOwner, bytes20 btcHash160, bool isRegistered)
     {
-        btcHash160   = pubkeyToHash160(pubkey);
-        evmOwner     = identity.btcToEvm(btcHash160);
+        btcHash160 = pubkeyToHash160(pubkey);
+        evmOwner = identity.btcToEvm(btcHash160);
         isRegistered = evmOwner != address(0);
     }
 
@@ -116,20 +110,14 @@ contract CrossChainProofVerifier {
     function verifyRequestProof(uint256 requestId, bytes memory pubkey)
         external
         view
-        returns (
-            bool    fulfilled,
-            bytes32 btcTxid,
-            address signerEvm,
-            bytes20 signerHash160
-        )
+        returns (bool fulfilled, bytes32 btcTxid, address signerEvm, bytes20 signerHash160)
     {
         IBitcoinGateway.PaymentRequest memory req = gateway.getPaymentRequest(requestId);
-        fulfilled     = req.fulfilled;
-        btcTxid       = req.btcTxid;
+        fulfilled = req.fulfilled;
+        btcTxid = req.btcTxid;
         signerHash160 = pubkeyToHash160(pubkey);
-        signerEvm     = identity.btcToEvm(signerHash160);
+        signerEvm = identity.btcToEvm(signerHash160);
     }
-
 
     // ─── View: Strict Verification (reverts on failure) ──────────────────────
 
@@ -146,22 +134,17 @@ contract CrossChainProofVerifier {
     function requireValidProof(uint256 requestId, bytes memory pubkey)
         external
         view
-        returns (
-            address signerEvm,
-            bytes20 signerHash160,
-            uint256 amountSats,
-            bytes32 btcTxid
-        )
+        returns (address signerEvm, bytes20 signerHash160, uint256 amountSats, bytes32 btcTxid)
     {
         IBitcoinGateway.PaymentRequest memory req = gateway.getPaymentRequest(requestId);
         if (!req.fulfilled) revert RequestNotFulfilled();
 
         signerHash160 = pubkeyToHash160(pubkey);
-        signerEvm     = identity.btcToEvm(signerHash160);
+        signerEvm = identity.btcToEvm(signerHash160);
         if (signerEvm == address(0)) revert SignerNotRegistered();
 
         amountSats = req.amountSats;
-        btcTxid    = req.btcTxid;
+        btcTxid = req.btcTxid;
     }
 
     /**
@@ -172,11 +155,7 @@ contract CrossChainProofVerifier {
      * @return amountSats    The BTC amount that was paid.
      * @return btcTxid       The Bitcoin transaction hash.
      */
-    function requireProofFrom(
-        uint256 requestId,
-        bytes memory pubkey,
-        address expectedSigner
-    )
+    function requireProofFrom(uint256 requestId, bytes memory pubkey, address expectedSigner)
         external
         view
         returns (uint256 amountSats, bytes32 btcTxid)
@@ -184,13 +163,13 @@ contract CrossChainProofVerifier {
         IBitcoinGateway.PaymentRequest memory req = gateway.getPaymentRequest(requestId);
         if (!req.fulfilled) revert RequestNotFulfilled();
 
-        bytes20 h160    = pubkeyToHash160(pubkey);
-        address actual  = identity.btcToEvm(h160);
+        bytes20 h160 = pubkeyToHash160(pubkey);
+        address actual = identity.btcToEvm(h160);
         if (actual == address(0)) revert SignerNotRegistered();
         if (actual != expectedSigner) revert UnexpectedSigner();
 
         amountSats = req.amountSats;
-        btcTxid    = req.btcTxid;
+        btcTxid = req.btcTxid;
     }
 
     // ─── View: Batch Helpers ─────────────────────────────────────────────────
@@ -208,11 +187,13 @@ contract CrossChainProofVerifier {
     {
         uint256 len = requestIds.length;
         statuses = new bool[](len);
-        txids    = new bytes32[](len);
+        txids = new bytes32[](len);
 
-        for (uint256 i; i < len; ) {
+        for (uint256 i; i < len;) {
             (statuses[i], txids[i]) = gateway.getPaymentStatus(requestIds[i]);
-            unchecked { ++i; }
+            unchecked {
+                ++i;
+            }
         }
     }
 }

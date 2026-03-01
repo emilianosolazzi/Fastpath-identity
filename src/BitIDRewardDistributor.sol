@@ -36,7 +36,6 @@ interface IFastPathIdentity {
  *        - Recipient must have a Proof160 identity (optional, toggleable)
  */
 contract BitIDRewardDistributor is Ownable, ReentrancyGuard {
-
     // ══════════════════════════════════════════════════════════════
     // ERRORS
     // ══════════════════════════════════════════════════════════════
@@ -57,18 +56,18 @@ contract BitIDRewardDistributor is Ownable, ReentrancyGuard {
 
     /// @notice Predefined protocol action types
     enum Action {
-        IDENTITY_REGISTRATION,   // 0 — Proof160 registration
-        BNS_REGISTRATION,        // 1 — Bitcoin Name Service name mint
-        BNS_RENEWAL,             // 2 — BNS name renewal
-        GATEWAY_RELAY,           // 3 — BTC→EVM relay confirmation
-        FIRST_TRANSFER,          // 4 — Onboarding bonus (first Gateway use)
-        REFERRAL                 // 5 — Referred a new registrant
+        IDENTITY_REGISTRATION, // 0 — Proof160 registration
+        BNS_REGISTRATION, // 1 — Bitcoin Name Service name mint
+        BNS_RENEWAL, // 2 — BNS name renewal
+        GATEWAY_RELAY, // 3 — BTC→EVM relay confirmation
+        FIRST_TRANSFER, // 4 — Onboarding bonus (first Gateway use)
+        REFERRAL // 5 — Referred a new registrant
     }
 
     struct RewardConfig {
-        uint256 amount;          // BitID per action (8 decimals)
-        uint256 cooldown;        // Seconds before same user can earn again for this action
-        bool enabled;            // Master switch per action
+        uint256 amount; // BitID per action (8 decimals)
+        uint256 cooldown; // Seconds before same user can earn again for this action
+        bool enabled; // Master switch per action
     }
 
     // ══════════════════════════════════════════════════════════════
@@ -148,17 +147,17 @@ contract BitIDRewardDistributor is Ownable, ReentrancyGuard {
         //  First transfer               32 BITID       once
         //  Referral                     10 BITID       1 hour
 
-        rewards[Action.IDENTITY_REGISTRATION] = RewardConfig(160 * 1e8,  type(uint256).max, true);
-        rewards[Action.BNS_REGISTRATION]      = RewardConfig( 16 * 1e8,  1 days,            true);
-        rewards[Action.BNS_RENEWAL]           = RewardConfig(  8 * 1e8,  1 days,            true);
-        rewards[Action.GATEWAY_RELAY]         = RewardConfig(  1 * 1e8,  0,                 true);
-        rewards[Action.FIRST_TRANSFER]        = RewardConfig( 32 * 1e8,  type(uint256).max, true);
-        rewards[Action.REFERRAL]              = RewardConfig( 10 * 1e8,  1 hours,           true);
+        rewards[Action.IDENTITY_REGISTRATION] = RewardConfig(160 * 1e8, type(uint256).max, true);
+        rewards[Action.BNS_REGISTRATION] = RewardConfig(16 * 1e8, 1 days, true);
+        rewards[Action.BNS_RENEWAL] = RewardConfig(8 * 1e8, 1 days, true);
+        rewards[Action.GATEWAY_RELAY] = RewardConfig(1 * 1e8, 0, true);
+        rewards[Action.FIRST_TRANSFER] = RewardConfig(32 * 1e8, type(uint256).max, true);
+        rewards[Action.REFERRAL] = RewardConfig(10 * 1e8, 1 hours, true);
 
         // Default epoch: 1M BITID per week
-        epochBudget   = 1_000_000 * 1e8;
+        epochBudget = 1_000_000 * 1e8;
         epochDuration = 7 days;
-        epochStart    = block.timestamp;
+        epochStart = block.timestamp;
 
         // Owner is always an authorized caller (for manual/test rewards)
         authorizedCallers[msg.sender] = true;

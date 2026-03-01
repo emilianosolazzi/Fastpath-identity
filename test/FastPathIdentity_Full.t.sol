@@ -23,11 +23,11 @@ contract Test {
     function assertTrue(bool condition, string memory message) internal pure {
         require(condition, message);
     }
-    
+
     function assertEq(uint256 a, uint256 b, string memory message) internal pure {
         require(a == b, message);
     }
-    
+
     function assertEq(address a, address b, string memory message) internal pure {
         require(a == b, message);
     }
@@ -53,6 +53,7 @@ contract MockDiscountNFT is IDiscountNFT {
 ///      Used to verify the 2300-gas cap in receiveFunds prevents gas-bomb griefing.
 contract GasBombReceiver {
     uint256 public x;
+
     receive() external payable {
         // Storage write costs 5000+ gas, guaranteed to exceed 2300 stipend
         x = x + 1;
@@ -109,8 +110,9 @@ contract ReentrantReceiver {
     receive() external payable {
         if (!reentered && address(this).balance >= 1) {
             try identity.receiveFunds{value: 1}(hash) {
-                // no-op
-            } catch {
+            // no-op
+            }
+            catch {
                 reentered = true;
             }
         }
@@ -152,12 +154,13 @@ contract FastPathIdentityHarness is FastPathIdentity {
 contract FastPathIdentityFullTest is Test {
     FastPathIdentity private identity;
     address private owner = address(0xA11CE);
-    
+
     // secp256k1 generator pubkey (privkey = 1)
     uint256 private constant PRIVKEY = 1;
     uint8 private constant PUBKEY_PREFIX = 2;
     bytes32 private constant PUBKEY_X = 0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798;
-    bytes private constant PUBKEY_UNCOMP = hex"0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8";
+    bytes private constant PUBKEY_UNCOMP =
+        hex"0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8";
     /// @dev secp256k1 curve order n, used to compute high-s = n - s for malleability tests
     uint256 private constant SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
     bytes20 private hash160 = bytes20(keccak256("test-btc-hash160"));
@@ -488,13 +491,13 @@ contract FastPathIdentityFullTest is Test {
         vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.InsufficientFee.selector));
         identity.registerBitcoinAddressV2{value: 0.0009 ether}(PUBKEY_PREFIX, PUBKEY_X, r, s, v, false);
     }
-    
+
     function testSetRegistrationFee() public {
         vm.prank(owner);
         identity.setRegistrationFee(0.002 ether);
         assertEq(identity.registrationFee(), 0.002 ether, "fee not updated");
     }
-    
+
     function testSetRegistrationFee_OnlyOwner() public {
         vm.prank(address(0xBAD));
         vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NotOwner.selector));
@@ -506,26 +509,26 @@ contract FastPathIdentityFullTest is Test {
         vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.FeeTooHigh.selector));
         identity.setRegistrationFee(1.1 ether);
     }
-    
+
     function testWithdrawFees() public {
         // Set accumulatedFees (slot 13) and deal matching ETH to contract
         vm.store(address(identity), bytes32(uint256(13)), bytes32(uint256(1 ether)));
         vm.deal(address(identity), 1 ether);
         uint256 ownerBalBefore = owner.balance;
-        
+
         vm.prank(owner);
         identity.withdrawFees();
-        
+
         assertTrue(owner.balance == ownerBalBefore + 1 ether, "fees not withdrawn");
         assertEq(identity.accumulatedFees(), 0, "accumulatedFees not cleared");
     }
-    
+
     function testWithdrawFees_OnlyOwner() public {
         vm.prank(address(0xBAD));
         vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NotOwner.selector));
         identity.withdrawFees();
     }
-    
+
     function testWithdrawFees_NoFeesReverts() public {
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.NoFeesToWithdraw.selector));
@@ -669,37 +672,38 @@ contract FastPathIdentityFullTest is Test {
     // ==========================================
     // RELINK TESTS
     // ==========================================
-    
+
     function testToggleRelink() public {
         vm.prank(owner);
         identity.setRelinkEnabled(true);
         assertTrue(identity.relinkEnabled(), "relink not enabled");
-        
+
         vm.prank(owner);
         identity.setRelinkEnabled(false);
         assertTrue(!identity.relinkEnabled(), "relink not disabled");
     }
-    
+
     function testSetRelinkCooldown() public {
         vm.prank(owner);
         identity.setRelinkCooldown(7 days);
         assertEq(identity.relinkCooldown(), 7 days, "cooldown not set");
     }
-    
+
     function testSetRelinkCooldown_MinimumEnforced() public {
         vm.prank(owner);
         vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.CooldownTooSmall.selector));
         identity.setRelinkCooldown(59 minutes);
     }
-    
+
     function testInitiateRelink_DisabledByDefault() public {
         // Set up registered hash
         _setBtcToEvm(hash160, address(this));
-        
+
         bytes memory dummyPubkey = hex"02" hex"1111111111111111111111111111111111111111111111111111111111111111";
         // 65 bytes: 32(r) + 32(s) + 1(v) = exactly what the contract expects
-        bytes memory dummySig = hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111b";
-        
+        bytes memory dummySig =
+            hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111b";
+
         vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.RelinkDisabled.selector));
         identity.initiateRelink(hash160, address(0x0000000000000000000000000000000000000002), dummyPubkey, dummySig);
     }
@@ -710,7 +714,8 @@ contract FastPathIdentityFullTest is Test {
 
         bytes memory dummyPubkey = hex"02" hex"1111111111111111111111111111111111111111111111111111111111111111";
         // 65 bytes: 32(r) + 32(s) + 1(v) = exactly what the contract expects
-        bytes memory dummySig = hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111b";
+        bytes memory dummySig =
+            hex"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111b";
 
         vm.expectRevert(abi.encodeWithSelector(FastPathIdentity.ZeroHash160.selector));
         identity.initiateRelink(bytes20(0), address(0x0000000000000000000000000000000000000002), dummyPubkey, dummySig);
@@ -784,7 +789,9 @@ contract FastPathIdentityFullTest is Test {
         identity.registerBitcoinAddressV2{value: 0.001 ether}(PUBKEY_PREFIX, PUBKEY_X, r, s, v, false);
 
         assertTrue(identity.hasControl(signer), "owner should have control");
-        assertTrue(!identity.hasControl(address(0x0000000000000000000000000000000000000002)), "other should not have control");
+        assertTrue(
+            !identity.hasControl(address(0x0000000000000000000000000000000000000002)), "other should not have control"
+        );
     }
 
     function testHasControlAfterRelink() public {
@@ -1118,14 +1125,14 @@ contract FastPathIdentityFullTest is Test {
         (bool hasPendingAfter,,,) = identity.getRelinkStatus(expected);
         assertTrue(!hasPendingAfter, "pending should be cleared after cancel");
     }
-    
+
     // NOTE: Full relink flow requires valid BTC signatures, omitted for now
     // Coverage will still be low until registration tests with valid signatures are added
 
     // ==========================================
     // EMERGENCY STOP TESTS
     // ==========================================
-    
+
     function testEmergencyDisableRelink() public {
         vm.prank(owner);
         identity.setEmergencyStop(true);
@@ -1600,8 +1607,7 @@ contract FastPathIdentityFullTest is Test {
         identity.withdrawFees(); // should revert — no registration fees accumulated
 
         // User deposit untouched
-        assertTrue(identity.pendingWithdrawals(receiverAddr) == 1 ether,
-            "user deposit should be safe");
+        assertTrue(identity.pendingWithdrawals(receiverAddr) == 1 ether, "user deposit should be safe");
     }
 
     function testWithdrawPendingFunds_MultipleDeposits() public {
@@ -1731,8 +1737,7 @@ contract FastPathIdentityFullTest is Test {
         _setLastLinkTime(testHash, 1);
         vm.warp(10 days);
 
-        (bool hasPending,,, uint256 cooldownRemaining) =
-            identity.getRelinkStatus(testHash);
+        (bool hasPending,,, uint256 cooldownRemaining) = identity.getRelinkStatus(testHash);
 
         assertTrue(!hasPending, "should have no pending");
         assertEq(cooldownRemaining, 0, "cooldown should be expired");
@@ -1846,8 +1851,9 @@ contract FastPathIdentityFullTest is Test {
         identity.withdrawFees();
 
         // User deposit untouched
-        assertEq(identity.pendingWithdrawals(receiverAddr), uint256(depositAmount),
-            "pendingWithdrawals must be preserved");
+        assertEq(
+            identity.pendingWithdrawals(receiverAddr), uint256(depositAmount), "pendingWithdrawals must be preserved"
+        );
     }
 
     // ==========================================
@@ -1878,7 +1884,7 @@ contract FastPathIdentityFullTest is Test {
         vm.prank(evm);
         identity.registerBitcoinAddressV2{value: 0.001 ether}(PUBKEY_PREFIX, PUBKEY_X, r, s, v, false);
     }
-    
+
     /// @dev Sets BOTH btcToEvm (slot 6) AND activeEvm (slot 11) for the given hash160.
     ///      cancelRelink, receiveFunds, and currentController all check activeEvm (slot 11),
     ///      so both slots must be set for tests that touch those code paths.
@@ -1890,7 +1896,7 @@ contract FastPathIdentityFullTest is Test {
         bytes32 activeSlot = keccak256(abi.encode(hash, uint256(11)));
         vm.store(address(identity), activeSlot, bytes32(uint256(uint160(evm))));
     }
-    
+
     function _setEvmToBtc(address evm, bytes20 hash) internal {
         bytes32 slot = keccak256(abi.encode(evm, uint256(7)));
         vm.store(address(identity), slot, bytes32(hash));
@@ -1913,11 +1919,8 @@ contract FastPathIdentityFullTest is Test {
     }
 
     function _bitcoinSignedMessageHash(bytes memory message) internal pure returns (bytes32) {
-        bytes memory data = abi.encodePacked(
-            "\x18Bitcoin Signed Message:\n",
-            _encodeCompactSize(message.length),
-            message
-        );
+        bytes memory data =
+            abi.encodePacked("\x18Bitcoin Signed Message:\n", _encodeCompactSize(message.length), message);
         bytes32 h1 = sha256(data);
         return sha256(abi.encodePacked(h1));
     }
@@ -1926,7 +1929,10 @@ contract FastPathIdentityFullTest is Test {
         if (value == 0) return "0";
         uint256 temp = value;
         uint256 digits;
-        while (temp != 0) { digits++; temp /= 10; }
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
         bytes memory buffer = new bytes(digits);
         while (value != 0) {
             digits -= 1;
@@ -1956,14 +1962,20 @@ contract FastPathIdentityFullTest is Test {
         bytes memory full;
         if (pubkey.length == 65) {
             full = new bytes(65);
-            for (uint256 i = 0; i < 65; i++) full[i] = pubkey[i];
+            for (uint256 i = 0; i < 65; i++) {
+                full[i] = pubkey[i];
+            }
         } else if (pubkey.length == 64) {
             full = new bytes(65);
             full[0] = 0x04;
-            for (uint256 i = 0; i < 64; i++) full[i + 1] = pubkey[i];
+            for (uint256 i = 0; i < 64; i++) {
+                full[i + 1] = pubkey[i];
+            }
         } else if (pubkey.length == 33) {
             full = new bytes(33);
-            for (uint256 i = 0; i < 33; i++) full[i] = pubkey[i];
+            for (uint256 i = 0; i < 33; i++) {
+                full[i] = pubkey[i];
+            }
         } else {
             revert("InvalidPublicKey");
         }

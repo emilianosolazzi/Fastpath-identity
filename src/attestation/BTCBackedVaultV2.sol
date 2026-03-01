@@ -7,13 +7,10 @@ import "./FastpathAttestationVerifier.sol";
 
 /// @notice Chainlink-compatible price feed interface
 interface AggregatorV3Interface {
-    function latestRoundData() external view returns (
-        uint80 roundId,
-        int256 answer,
-        uint256 startedAt,
-        uint256 updatedAt,
-        uint80 answeredInRound
-    );
+    function latestRoundData()
+        external
+        view
+        returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
     function decimals() external view returns (uint8);
 }
 
@@ -62,13 +59,12 @@ interface IDemoUSD_V2 {
  *   → 50% LTV → can borrow up to 67,500 dUSD
  */
 contract BTCBackedVaultV2 is Ownable, ReentrancyGuard {
-
     // ── Dependencies ───────────────────────────────────────────
     FastpathAttestationVerifier public immutable verifier;
     IDemoUSD_V2 public demoUSD;
 
     // ── Parameters ─────────────────────────────────────────────
-    uint256 public constant LTV_BPS = 5000;           // 50% LTV
+    uint256 public constant LTV_BPS = 5000; // 50% LTV
     uint256 public constant BPS_DENOMINATOR = 10000;
     uint256 public constant SATS_PER_BTC = 1e8;
 
@@ -87,15 +83,15 @@ contract BTCBackedVaultV2 is Ownable, ReentrancyGuard {
     AggregatorV3Interface public priceFeed;
 
     /// @notice Fallback manual BTC price (used when priceFeed is not set)
-    uint256 public btcPriceUsdManual = 90_000 * 1e8;  // $90,000.00000000
+    uint256 public btcPriceUsdManual = 90_000 * 1e8; // $90,000.00000000
 
     // ── Positions ──────────────────────────────────────────────
 
     struct Position {
-        uint256 btcBalanceSats;    // Attested Bitcoin balance (satoshis)
-        string  btcAddress;        // The Bitcoin address
-        uint256 borrowedUSD;       // DemoUSD borrowed (18 decimals)
-        uint256 lastAttestTime;    // When balance was last attested
+        uint256 btcBalanceSats; // Attested Bitcoin balance (satoshis)
+        string btcAddress; // The Bitcoin address
+        uint256 borrowedUSD; // DemoUSD borrowed (18 decimals)
+        uint256 lastAttestTime; // When balance was last attested
     }
 
     mapping(address => Position) public positions;
@@ -179,14 +175,7 @@ contract BTCBackedVaultV2 is Ownable, ReentrancyGuard {
         bytes calldata signature
     ) external nonReentrant {
         // The verifier checks: signature, expiry, nonce, and that evmAddress == msg.sender
-        verifier.verifyBalance(
-            msg.sender,
-            btcAddress,
-            balanceSats,
-            timestamp,
-            nonce,
-            signature
-        );
+        verifier.verifyBalance(msg.sender, btcAddress, balanceSats, timestamp, nonce, signature);
 
         Position storage pos = positions[msg.sender];
 
@@ -220,8 +209,9 @@ contract BTCBackedVaultV2 is Ownable, ReentrancyGuard {
         // ── Freshness enforcement ──────────────────────────────
         // Prevents borrowing against stale attestations.
         // Without this, a user could attest 2 BTC, move it, wait, and borrow against nothing.
-        if (block.timestamp - pos.lastAttestTime > MAX_ATTEST_AGE)
+        if (block.timestamp - pos.lastAttestTime > MAX_ATTEST_AGE) {
             revert AttestationTooOld();
+        }
 
         uint256 maxBorrow = _maxBorrow(pos.btcBalanceSats);
         if (pos.borrowedUSD + amount > maxBorrow) revert ExceedsLTV();
@@ -273,9 +263,7 @@ contract BTCBackedVaultV2 is Ownable, ReentrancyGuard {
         bool isStale = (block.timestamp - pos.lastAttestTime > MAX_ATTEST_AGE);
 
         // Position must be unhealthy OR attestation must be stale
-        uint256 healthFactor = pos.borrowedUSD > 0
-            ? (maxBorrow * 100) / pos.borrowedUSD
-            : type(uint256).max;
+        uint256 healthFactor = pos.borrowedUSD > 0 ? (maxBorrow * 100) / pos.borrowedUSD : type(uint256).max;
 
         if (healthFactor >= LIQUIDATION_THRESHOLD && !isStale) revert PositionHealthy();
         if (repayAmount > pos.borrowedUSD) repayAmount = pos.borrowedUSD;
@@ -283,8 +271,8 @@ contract BTCBackedVaultV2 is Ownable, ReentrancyGuard {
         // Calculate collateral to seize (in sats) with liquidation bonus
         // collateralSats = (repayAmount * SATS_PER_BTC * (10000 + bonus)) / (btcPriceUsd() * 10000)
         uint256 currentPrice = btcPriceUsd();
-        uint256 collateralSats = (repayAmount * SATS_PER_BTC * (BPS_DENOMINATOR + LIQUIDATION_BONUS_BPS))
-            / (currentPrice * BPS_DENOMINATOR);
+        uint256 collateralSats =
+            (repayAmount * SATS_PER_BTC * (BPS_DENOMINATOR + LIQUIDATION_BONUS_BPS)) / (currentPrice * BPS_DENOMINATOR);
 
         // Cap seizure at available collateral
         if (collateralSats > pos.btcBalanceSats) {
@@ -308,15 +296,19 @@ contract BTCBackedVaultV2 is Ownable, ReentrancyGuard {
     /**
      * @notice Get full position details
      */
-    function getPosition(address user) external view returns (
-        uint256 btcBalanceSats,
-        string memory btcAddress,
-        uint256 borrowedUSD,
-        uint256 maxBorrowUSD,
-        uint256 healthFactor,
-        uint256 lastAttestTime,
-        bool isLiquidatable
-    ) {
+    function getPosition(address user)
+        external
+        view
+        returns (
+            uint256 btcBalanceSats,
+            string memory btcAddress,
+            uint256 borrowedUSD,
+            uint256 maxBorrowUSD,
+            uint256 healthFactor,
+            uint256 lastAttestTime,
+            bool isLiquidatable
+        )
+    {
         Position memory pos = positions[user];
         btcBalanceSats = pos.btcBalanceSats;
         btcAddress = pos.btcAddress;
@@ -338,12 +330,11 @@ contract BTCBackedVaultV2 is Ownable, ReentrancyGuard {
     /**
      * @notice Get vault statistics
      */
-    function getStats() external view returns (
-        uint256 _totalBtcSats,
-        uint256 _totalBorrowed,
-        uint256 _totalUsers,
-        uint256 _btcPriceUsd
-    ) {
+    function getStats()
+        external
+        view
+        returns (uint256 _totalBtcSats, uint256 _totalBorrowed, uint256 _totalUsers, uint256 _btcPriceUsd)
+    {
         return (totalBtcCollateralSats, totalBorrowed, totalUsers, btcPriceUsd());
     }
 

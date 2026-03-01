@@ -47,16 +47,16 @@ contract FastPathIdentity {
     error NotPendingOwner();
     error ZeroAddress();
     // ── fund-flow / receive
-    error NotNewEvmOwner();        // initiateRelink: caller must be the new EVM address
+    error NotNewEvmOwner(); // initiateRelink: caller must be the new EVM address
     error NotPendingRelinkOwner(); // finalizeRelink: only the pending new EVM can finalize
-    error EmergencyStopActive();   // noEmergency: emergency stop is engaged
-    error ZeroValue();             // receiveFunds: cannot send zero ETH
-    error Hash160NotRegistered();  // receiveFunds/receiveTokens: hash160 has no active controller
-    error DirectEvmPreferred();    // receiver opted out of hash160-based routing
-    error NoPendingFunds();        // withdrawPendingFunds: nothing to withdraw
-    error ZeroAmount();            // receiveTokens: amount must be > 0
-    error InvalidToken();          // receiveTokens: token address is zero
-    error PreferenceAlreadySet();  // setReceivePreference: no-op prevention
+    error EmergencyStopActive(); // noEmergency: emergency stop is engaged
+    error ZeroValue(); // receiveFunds: cannot send zero ETH
+    error Hash160NotRegistered(); // receiveFunds/receiveTokens: hash160 has no active controller
+    error DirectEvmPreferred(); // receiver opted out of hash160-based routing
+    error NoPendingFunds(); // withdrawPendingFunds: nothing to withdraw
+    error ZeroAmount(); // receiveTokens: amount must be > 0
+    error InvalidToken(); // receiveTokens: token address is zero
+    error PreferenceAlreadySet(); // setReceivePreference: no-op prevention
 
     /// @dev secp256k1 curve order n divided by 2, used to enforce low-s signatures (EIP-2).
     ///      Any signature with s > HALF_ORDER is malleable and must be rejected.
@@ -87,7 +87,7 @@ contract FastPathIdentity {
     ///      After relink, this still returns the ORIGINAL registrant, NOT the current controller.
     ///      Use currentController() or hasControl() for current ownership verification.
     mapping(bytes20 => address) public btcToEvm;
-    
+
     /// @notice HISTORICAL mapping from EVM address to Bitcoin Hash160 (NOT cleared on relink).
     /// @dev After relink, BOTH old and new EVM addresses will have entries pointing to the same btcHash160.
     ///      This preserves audit trail of all associations. Do NOT use this alone to verify current ownership.
@@ -96,9 +96,12 @@ contract FastPathIdentity {
 
     /// @notice Timestamp of the last completed link/relink for a Bitcoin Hash160
     mapping(bytes20 => uint256) public lastLinkTime;
-    
+
     // Fund receiving preferences
-    enum ReceivePreference { DirectEVM, ViaHash160 }
+    enum ReceivePreference {
+        DirectEVM,
+        ViaHash160
+    }
     /// @notice User's preference for receiving funds (default: DirectEVM)
     mapping(address => ReceivePreference) public receivePreference;
 
@@ -120,7 +123,7 @@ contract FastPathIdentity {
 
     /// @notice Protocol fees accumulated from registrations (separate from user deposits)
     uint256 public accumulatedFees;
-    
+
     // Events
     event BitcoinAddressRegistered(address indexed user, bytes20 btcHash160, uint256 feePaid);
     event FeeUpdated(uint256 newFee);
@@ -174,11 +177,11 @@ contract FastPathIdentity {
      * @param signature The signature (65 bytes) proving ownership.
      * @param message The message that was signed. MUST be the hex string of msg.sender (e.g. "0x123...").
      */
-    function registerBitcoinAddress(
-        bytes calldata pubkey,
-        bytes calldata signature,
-        bytes calldata message
-    ) external payable nonReentrant {
+    function registerBitcoinAddress(bytes calldata pubkey, bytes calldata signature, bytes calldata message)
+        external
+        payable
+        nonReentrant
+    {
         // Early calldata length bounds to prevent griefing with oversized inputs.
         // pubkey: 33 (compressed) or 64/65 (uncompressed). signature: always 65.
         // message: "0x" + 40 hex chars = 42 bytes max for an EVM address string.
@@ -209,7 +212,7 @@ contract FastPathIdentity {
         if (!_authenticateSignatureOnly(pubkey, signature, message)) {
             revert InvalidSignature();
         }
-        
+
         // 3. Derive BTC Address
         bytes20 btcHash160 = btcHash160FromPubkey(pubkey);
         if (btcHash160 == bytes20(0)) revert ZeroHash160();
@@ -240,8 +243,8 @@ contract FastPathIdentity {
      * @dev Same authentication as registerBitcoinAddress, but avoids dynamic bytes calldata that
      *      can cause poor UX / Ledger blind-signing issues.
      *
-    * @param pubkeyPrefix First byte of compressed pubkey (0x02 or 0x03).
-    * @param pubkeyX X coordinate (32 bytes) of compressed pubkey.
+     * @param pubkeyPrefix First byte of compressed pubkey (0x02 or 0x03).
+     * @param pubkeyX X coordinate (32 bytes) of compressed pubkey.
      * @param r Signature r.
      * @param s Signature s.
      * @param v Signature v (27/28 or 0/1).
@@ -287,9 +290,7 @@ contract FastPathIdentity {
         // Enforce low-s to prevent ECDSA malleability (EIP-2)
         if (uint256(s) > HALF_ORDER) revert SignatureSMustBeLowOrder();
 
-        bytes32 digest = bitcoinStyle
-            ? toBitcoinSignedMessageHashMem(message)
-            : toEthSignedMessageHashMem(message);
+        bytes32 digest = bitcoinStyle ? toBitcoinSignedMessageHashMem(message) : toEthSignedMessageHashMem(message);
 
         if (ecrecover(digest, vv, r, s) != expectedSigner) {
             revert InvalidSignature();
@@ -350,7 +351,7 @@ contract FastPathIdentity {
 
         emit FeesWithdrawn(owner, amount);
 
-        (bool success, ) = owner.call{value: amount}("");
+        (bool success,) = owner.call{value: amount}("");
         if (!success) revert TransferFailed();
     }
 
@@ -418,12 +419,10 @@ contract FastPathIdentity {
     // Relink Flow (two-phase, Bitcoin-auth)
     // ==========================================
 
-    function initiateRelink(
-        bytes20 btcHash160,
-        address newEvm,
-        bytes calldata pubkey,
-        bytes calldata signature
-    ) external noEmergency {
+    function initiateRelink(bytes20 btcHash160, address newEvm, bytes calldata pubkey, bytes calldata signature)
+        external
+        noEmergency
+    {
         // Early calldata length bounds to prevent griefing
         if (pubkey.length > 65) revert InvalidPublicKey();
         if (signature.length != 65) revert InvalidSignature();
@@ -452,17 +451,13 @@ contract FastPathIdentity {
         // Require Bitcoin signature over the lowercase hex string of the NEW EVM address
         // Convert to memory first since _authenticateSignatureOnly needs calldata
         bytes memory msgMem = bytes(toHex(newEvm));
-        
+
         // Create a temporary calldata slice - we'll pass it inline
         // Since we can't convert memory to calldata, use a memory-compatible verification
         if (!_verifySignatureFromMemory(pubkey, signature, msgMem)) revert InvalidSignature();
 
         uint256 unlockTime = block.timestamp + relinkCooldown;
-        pendingRelinks[btcHash160] = PendingRelink({
-            newEvm: newEvm,
-            unlockTime: unlockTime,
-            exists: true
-        });
+        pendingRelinks[btcHash160] = PendingRelink({newEvm: newEvm, unlockTime: unlockTime, exists: true});
 
         emit RelinkInitiated(btcHash160, newEvm, unlockTime);
     }
@@ -498,10 +493,10 @@ contract FastPathIdentity {
         // Only update the EVM→BTC for the new owner
         evmToBtc[pending.newEvm] = btcHash160;
         activeEvm[btcHash160] = pending.newEvm;
-        
+
         // DO NOT modify btcToEvm[btcHash160] - it's permanent
         // DO NOT clear evmToBtc[oldEvm] - history is important
-        
+
         lastLinkTime[btcHash160] = block.timestamp;
 
         delete pendingRelinks[btcHash160];
@@ -520,21 +515,18 @@ contract FastPathIdentity {
         emit RelinkCancelled(btcHash160, msg.sender);
     }
 
-    function getRelinkStatus(bytes20 btcHash160) external view returns (
-        bool hasPending,
-        address pendingNewEvm,
-        uint256 unlockTime,
-        uint256 cooldownRemaining
-    ) {
+    function getRelinkStatus(bytes20 btcHash160)
+        external
+        view
+        returns (bool hasPending, address pendingNewEvm, uint256 unlockTime, uint256 cooldownRemaining)
+    {
         PendingRelink memory pending = pendingRelinks[btcHash160];
         hasPending = pending.exists;
         pendingNewEvm = pending.newEvm;
         unlockTime = pending.unlockTime;
 
         if (pending.exists) {
-            cooldownRemaining = pending.unlockTime > block.timestamp
-                ? pending.unlockTime - block.timestamp
-                : 0;
+            cooldownRemaining = pending.unlockTime > block.timestamp ? pending.unlockTime - block.timestamp : 0;
         } else {
             uint256 nextTime = lastLinkTime[btcHash160] + relinkCooldown;
             cooldownRemaining = nextTime > block.timestamp ? nextTime - block.timestamp : 0;
@@ -593,7 +585,7 @@ contract FastPathIdentity {
 
         emit PendingFundsWithdrawn(msg.sender, amount);
 
-        (bool success, ) = msg.sender.call{value: amount}("");
+        (bool success,) = msg.sender.call{value: amount}("");
         if (!success) revert TransferFailed();
     }
 
@@ -616,11 +608,11 @@ contract FastPathIdentity {
     // Cryptographic Helper Functions
     // ==========================================
 
-    function _authenticateSignatureOnly(
-        bytes calldata pubkey,
-        bytes calldata signature,
-        bytes calldata message
-    ) internal pure returns (bool) {
+    function _authenticateSignatureOnly(bytes calldata pubkey, bytes calldata signature, bytes calldata message)
+        internal
+        pure
+        returns (bool)
+    {
         if (pubkey.length != 65 && pubkey.length != 64 && pubkey.length != 33) return false;
         if (signature.length != 65) return false;
 
@@ -653,11 +645,11 @@ contract FastPathIdentity {
         return false;
     }
 
-    function _verifySignatureFromMemory(
-        bytes calldata pubkey,
-        bytes calldata signature,
-        bytes memory message
-    ) internal pure returns (bool) {
+    function _verifySignatureFromMemory(bytes calldata pubkey, bytes calldata signature, bytes memory message)
+        internal
+        pure
+        returns (bool)
+    {
         if (pubkey.length != 65 && pubkey.length != 64 && pubkey.length != 33) return false;
         if (signature.length != 65) return false;
 
@@ -715,30 +707,42 @@ contract FastPathIdentity {
     function _pubkeyToXY(bytes calldata pubkey) internal pure returns (bytes memory xy) {
         if (pubkey.length == 65) {
             xy = new bytes(64);
-            for (uint256 i = 0; i < 64; i++) xy[i] = pubkey[i + 1];
+            for (uint256 i = 0; i < 64; i++) {
+                xy[i] = pubkey[i + 1];
+            }
         } else if (pubkey.length == 64) {
             xy = new bytes(64);
-            for (uint256 i = 0; i < 64; i++) xy[i] = pubkey[i];
+            for (uint256 i = 0; i < 64; i++) {
+                xy[i] = pubkey[i];
+            }
         } else if (pubkey.length == 33) {
             bytes memory uncompressed = decompressCompressedSecp256k1(pubkey);
             xy = new bytes(64);
-            for (uint256 i = 0; i < 64; i++) xy[i] = uncompressed[i + 1];
+            for (uint256 i = 0; i < 64; i++) {
+                xy[i] = uncompressed[i + 1];
+            }
         } else {
             revert InvalidPublicKey();
         }
     }
-    
+
     function _pubkeyToXYMem(bytes memory pubkey) internal pure returns (bytes memory xy) {
         if (pubkey.length == 65) {
             xy = new bytes(64);
-            for (uint256 i = 0; i < 64; i++) xy[i] = pubkey[i + 1];
+            for (uint256 i = 0; i < 64; i++) {
+                xy[i] = pubkey[i + 1];
+            }
         } else if (pubkey.length == 64) {
             xy = new bytes(64);
-            for (uint256 i = 0; i < 64; i++) xy[i] = pubkey[i];
+            for (uint256 i = 0; i < 64; i++) {
+                xy[i] = pubkey[i];
+            }
         } else if (pubkey.length == 33) {
             bytes memory uncompressed = decompressCompressedSecp256k1Mem(pubkey);
             xy = new bytes(64);
-            for (uint256 i = 0; i < 64; i++) xy[i] = uncompressed[i + 1];
+            for (uint256 i = 0; i < 64; i++) {
+                xy[i] = uncompressed[i + 1];
+            }
         } else {
             revert InvalidPublicKey();
         }
@@ -748,19 +752,19 @@ contract FastPathIdentity {
         if (comp.length != 33) revert InvalidPublicKey();
         uint8 prefix = uint8(comp[0]);
         if (prefix != 0x02 && prefix != 0x03) revert InvalidPublicKey();
-        
+
         bytes32 x;
         assembly { x := calldataload(add(comp.offset, 1)) }
-        
+
         uint256 p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F;
         uint256 xUint = uint256(x);
         uint256 y2 = addmod(mulmod(xUint, mulmod(xUint, xUint, p), p), 7, p);
         uint256 y = modSqrt(y2, p);
-        
+
         if ((y & 1) != (prefix & 1)) {
             y = p - y;
         }
-        
+
         uncompressed = new bytes(65);
         uncompressed[0] = 0x04;
         for (uint256 i = 0; i < 32; i++) {
@@ -827,34 +831,46 @@ contract FastPathIdentity {
         bytes memory full;
         if (pubkey.length == 65) {
             full = new bytes(65);
-            for (uint256 i = 0; i < 65; i++) full[i] = pubkey[i];
+            for (uint256 i = 0; i < 65; i++) {
+                full[i] = pubkey[i];
+            }
         } else if (pubkey.length == 64) {
             full = new bytes(65);
             full[0] = 0x04;
-            for (uint256 i = 0; i < 64; i++) full[i + 1] = pubkey[i];
+            for (uint256 i = 0; i < 64; i++) {
+                full[i + 1] = pubkey[i];
+            }
         } else if (pubkey.length == 33) {
             full = new bytes(33);
-            for (uint256 i = 0; i < 33; i++) full[i] = pubkey[i];
+            for (uint256 i = 0; i < 33; i++) {
+                full[i] = pubkey[i];
+            }
         } else {
             revert InvalidPublicKey();
         }
         bytes32 sha = sha256(full);
         return ripemd160(abi.encodePacked(sha));
     }
-    
+
     // Memory variants for V2 (constructed bytes)
     function btcHash160FromPubkeyMem(bytes memory pubkey) internal pure returns (bytes20) {
         bytes memory full;
         if (pubkey.length == 65) {
             full = new bytes(65);
-            for (uint256 i = 0; i < 65; i++) full[i] = pubkey[i];
+            for (uint256 i = 0; i < 65; i++) {
+                full[i] = pubkey[i];
+            }
         } else if (pubkey.length == 64) {
             full = new bytes(65);
             full[0] = 0x04;
-            for (uint256 i = 0; i < 64; i++) full[i + 1] = pubkey[i];
+            for (uint256 i = 0; i < 64; i++) {
+                full[i + 1] = pubkey[i];
+            }
         } else if (pubkey.length == 33) {
             full = new bytes(33);
-            for (uint256 i = 0; i < 33; i++) full[i] = pubkey[i];
+            for (uint256 i = 0; i < 33; i++) {
+                full[i] = pubkey[i];
+            }
         } else {
             revert InvalidPublicKey();
         }
@@ -863,21 +879,15 @@ contract FastPathIdentity {
     }
 
     function toBitcoinSignedMessageHash(bytes calldata message) internal pure returns (bytes32) {
-        bytes memory data = abi.encodePacked(
-            "\x18Bitcoin Signed Message:\n",
-            _encodeCompactSize(message.length),
-            message
-        );
+        bytes memory data =
+            abi.encodePacked("\x18Bitcoin Signed Message:\n", _encodeCompactSize(message.length), message);
         bytes32 h1 = sha256(data);
         return sha256(abi.encodePacked(h1));
     }
-    
+
     function toBitcoinSignedMessageHashMem(bytes memory message) internal pure returns (bytes32) {
-        bytes memory data = abi.encodePacked(
-            "\x18Bitcoin Signed Message:\n",
-            _encodeCompactSize(message.length),
-            message
-        );
+        bytes memory data =
+            abi.encodePacked("\x18Bitcoin Signed Message:\n", _encodeCompactSize(message.length), message);
         bytes32 h1 = sha256(data);
         return sha256(abi.encodePacked(h1));
     }
@@ -885,7 +895,7 @@ contract FastPathIdentity {
     function toEthSignedMessageHash(bytes calldata s) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n", _toString(s.length), s));
     }
-    
+
     function toEthSignedMessageHashMem(bytes memory s) internal pure returns (bytes32) {
         return keccak256(abi.encodePacked("\x19Ethereum Signed Message:\n", _toString(s.length), s));
     }
@@ -929,7 +939,10 @@ contract FastPathIdentity {
         if (value == 0) return "0";
         uint256 temp = value;
         uint256 digits;
-        while (temp != 0) { digits++; temp /= 10; }
+        while (temp != 0) {
+            digits++;
+            temp /= 10;
+        }
         bytes memory buffer = new bytes(digits);
         while (value != 0) {
             digits -= 1;

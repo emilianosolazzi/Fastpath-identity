@@ -55,7 +55,7 @@ contract Proof160 is ERC721, Ownable {
 
         bytes32 messageHash = keccak256(abi.encodePacked(msg.sender, block.chainid, "Proof160EarlyAdopter"));
         bytes32 ethSignedMessageHash = MessageHashUtils.toEthSignedMessageHash(messageHash);
-        
+
         address recoveredSigner = ethSignedMessageHash.recover(signature);
         if (recoveredSigner != trustedSigner) revert InvalidSignature();
 
@@ -76,10 +76,12 @@ contract Proof160 is ERC721, Ownable {
         if (_nextTokenId + quantity - 1 > MAX_SUPPLY) revert MaxSupplyReached();
 
         uint256 startId = _nextTokenId;
-        for (uint256 i = 0; i < quantity; ) {
+        for (uint256 i = 0; i < quantity;) {
             uint256 tokenId = _nextTokenId++;
             _safeMint(to, tokenId);
-            unchecked { i++; }
+            unchecked {
+                i++;
+            }
         }
         emit MintedBatch(to, startId, quantity);
     }
@@ -92,7 +94,7 @@ contract Proof160 is ERC721, Ownable {
 
         string memory idStr = tokenId.toString();
         string memory maxStr = MAX_SUPPLY.toString();
-        
+
         // Dynamic SVG Construction (Premium Design)
         bytes memory svg = abi.encodePacked(
             '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">',
@@ -105,18 +107,29 @@ contract Proof160 is ERC721, Ownable {
             '<path d="M90 285 Q200 270 310 285 L310 325 Q200 310 90 325 Z" fill="#00C2A8" />',
             '<text x="200" y="310" font-family="Arial,sans-serif" font-weight="bold" font-size="14" text-anchor="middle" fill="#081730">EARLY ADOPTER</text>',
             '<rect x="135" y="326" width="130" height="26" rx="8" fill="#0c2245" stroke="#00C2A8" stroke-width="1.2" opacity="0.9"/>',
-            '<text x="200" y="345" font-family="JetBrains Mono,monospace" font-weight="600" font-size="14" text-anchor="middle" fill="#00C2A8">#', 
-            idStr, ' / ', maxStr, '</text></svg>'
+            '<text x="200" y="345" font-family="JetBrains Mono,monospace" font-weight="600" font-size="14" text-anchor="middle" fill="#00C2A8">#',
+            idStr,
+            " / ",
+            maxStr,
+            "</text></svg>"
         );
 
         string memory image = string(abi.encodePacked("data:image/svg+xml;base64,", Base64.encode(svg)));
 
         // Metadata JSON
         bytes memory json = abi.encodePacked(
-            '{"name":"Proof160 #', idStr, 
-            '","description":"Proof160 Early Adopter Badge. Total supply limited to ', maxStr, '.",',
-            '"image":"', image, '",',
-            '"attributes":[{"trait_type":"Serial","value":"', idStr, '/', maxStr, 
+            '{"name":"Proof160 #',
+            idStr,
+            '","description":"Proof160 Early Adopter Badge. Total supply limited to ',
+            maxStr,
+            '.",',
+            '"image":"',
+            image,
+            '",',
+            '"attributes":[{"trait_type":"Serial","value":"',
+            idStr,
+            "/",
+            maxStr,
             '"},{"trait_type":"Tier","value":"Early Adopter"}]}'
         );
 

@@ -15,7 +15,6 @@ pragma solidity 0.8.30;
  *   5. Your contract calls verifyBalance() / verifyOwnership()
  */
 interface IFastpathAttestation {
-
     /// @notice Verify a signed Bitcoin balance attestation
     /// @param evmAddress   The EVM address claiming the BTC balance
     /// @param btcAddress   The Bitcoin address whose balance was checked

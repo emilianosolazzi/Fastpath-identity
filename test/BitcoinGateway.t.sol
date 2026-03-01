@@ -86,10 +86,12 @@ contract BitcoinGatewayTest is Test {
     bytes32 constant DUMMY_TXID = bytes32(uint256(0xdeadbeef));
     bytes32 constant FINGERPRINT_1 = bytes32(uint256(0xAA));
     bytes32 constant FINGERPRINT_2 = bytes32(uint256(0xBB));
-    bytes constant DUMMY_PUBKEY = hex"0400000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002";
-    bytes constant DUMMY_PROOF = hex"00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002";
+    bytes constant DUMMY_PUBKEY =
+        hex"0400000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002";
+    bytes constant DUMMY_PROOF =
+        hex"00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000002";
 
-    uint256 constant RELAY_FEE = 0.001 ether;  // ETH paid by user at proof submission
+    uint256 constant RELAY_FEE = 0.001 ether; // ETH paid by user at proof submission
     uint256 constant SATS = 100_000;
 
     // ── Setup ─────────────────────────────────────────────────────────────────
@@ -133,18 +135,14 @@ contract BitcoinGatewayTest is Test {
 
     function test_sendBitcoin_createsRequest() public {
         vm.prank(user1);
-        uint256 id = gateway.sendBitcoin(
-            "bc1qsender", "bc1qreceiver", SATS, "test memo"
-        );
+        uint256 id = gateway.sendBitcoin("bc1qsender", "bc1qreceiver", SATS, "test memo");
         assertEq(id, 0, "first request should be 0");
         assertEq(gateway.requestCount(), 1, "requestCount should be 1");
     }
 
     function test_sendBitcoin_storesCorrectData() public {
         vm.prank(user1);
-        gateway.sendBitcoin(
-            "bc1qsender", "bc1qreceiver", SATS, "my memo"
-        );
+        gateway.sendBitcoin("bc1qsender", "bc1qreceiver", SATS, "my memo");
 
         BitcoinGateway.PaymentRequest memory req = gateway.getPaymentRequest(0);
         assertEq(req.requester, user1, "requester mismatch");
@@ -555,7 +553,7 @@ contract BitcoinGatewayTest is Test {
 
     function test_plainEth_isRejected() public {
         vm.prank(user1);
-        (bool success, ) = address(gateway).call{value: 1 ether}("");
+        (bool success,) = address(gateway).call{value: 1 ether}("");
         assertFalse(success, "contract must not accept plain ETH transfers");
         assertEq(address(gateway).balance, 0, "balance should remain zero");
     }
@@ -567,12 +565,10 @@ contract BitcoinGatewayTest is Test {
     function test_e2e_fullLifecycle() public {
         // 1. User registers a Bitcoin payment intent — completely free, no ETH locked
         vm.prank(user1);
-        uint256 id = gateway.sendBitcoin(
-            "bc1qsender", "bc1qreceiver", 50000, "e2e test"
-        );
+        uint256 id = gateway.sendBitcoin("bc1qsender", "bc1qreceiver", 50000, "e2e test");
 
         // 2. Verify request state
-        (bool fulfilled, ) = gateway.getPaymentStatus(id);
+        (bool fulfilled,) = gateway.getPaymentStatus(id);
         assertFalse(fulfilled, "should be pending");
         assertEq(address(gateway).balance, 0, "no ETH should be locked");
 
@@ -582,7 +578,7 @@ contract BitcoinGatewayTest is Test {
         gateway.submitBitcoinProof{value: RELAY_FEE}(id, DUMMY_TXID, DUMMY_PUBKEY, DUMMY_PROOF);
 
         // 4. Verify fulfilled
-        (fulfilled, ) = gateway.getPaymentStatus(id);
+        (fulfilled,) = gateway.getPaymentStatus(id);
         assertTrue(fulfilled, "should be fulfilled");
 
         // 5. Protocol has collected the full RELAY_FEE; withdraw to fee recipient
@@ -601,9 +597,7 @@ contract BitcoinGatewayTest is Test {
 
         // 2. User registers payment intent — free, no ETH locked
         vm.prank(user1);
-        uint256 id = gateway.sendBitcoin(
-            "bc1qfrom", "bc1qto", 200000, "decentralized"
-        );
+        uint256 id = gateway.sendBitcoin("bc1qfrom", "bc1qto", 200000, "decentralized");
         assertEq(address(gateway).balance, 0, "no ETH locked after sendBitcoin");
 
         // 3. User submits proof after doing the BTC send; pays RELAY_FEE to protocol

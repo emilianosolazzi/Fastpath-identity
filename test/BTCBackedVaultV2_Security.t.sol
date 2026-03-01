@@ -75,14 +75,18 @@ contract BTCBackedVaultV2SecurityTest is Test {
     // ════════════════════════════════════════════════════
 
     function _attestBalance(address user, string memory btcAddr, uint256 sats, uint256 ts, uint256 nonce) internal {
-        bytes32 structHash = keccak256(abi.encode(
-            keccak256("BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"),
-            user,
-            keccak256(bytes(btcAddr)),
-            sats,
-            ts,
-            nonce
-        ));
+        bytes32 structHash = keccak256(
+            abi.encode(
+                keccak256(
+                    "BalanceAttestation(address evmAddress,string btcAddress,uint256 balanceSats,uint256 timestamp,uint256 nonce)"
+                ),
+                user,
+                keccak256(bytes(btcAddr)),
+                sats,
+                ts,
+                nonce
+            )
+        );
 
         bytes32 domainSep = _domainSeparator();
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", domainSep, structHash));
@@ -94,13 +98,15 @@ contract BTCBackedVaultV2SecurityTest is Test {
     }
 
     function _domainSeparator() internal view returns (bytes32) {
-        return keccak256(abi.encode(
-            keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-            keccak256("FastPathAttestation"),
-            keccak256("1"),
-            block.chainid,
-            address(verifier)
-        ));
+        return keccak256(
+            abi.encode(
+                keccak256("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+                keccak256("FastPathAttestation"),
+                keccak256("1"),
+                block.chainid,
+                address(verifier)
+            )
+        );
     }
 
     // ════════════════════════════════════════════════════
@@ -459,13 +465,11 @@ contract MockPriceFeed {
         updatedAt = _updatedAt;
     }
 
-    function latestRoundData() external view returns (
-        uint80 roundId,
-        int256 answer,
-        uint256 startedAt,
-        uint256 updatedAt_,
-        uint80 answeredInRound
-    ) {
+    function latestRoundData()
+        external
+        view
+        returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt_, uint80 answeredInRound)
+    {
         return (1, price, block.timestamp, updatedAt, 1);
     }
 

@@ -8,10 +8,10 @@ import "@openzeppelin/contracts/access/Ownable.sol";
  * @title DemoUSD for Proof160 / Hash160
  * @notice A demo stablecoin for showcasing BTC-backed lending
  * @dev Only the BTCBackedVault can mint/burn. Uses 18 decimals (standard).
- * 
+ *
  * This token demonstrates how a stablecoin can be minted against
  * Bitcoin collateral verified via FastPath Identity (Hash160).
- * 
+ *
  * Flow:
  * 1. User registers BTC identity via FastPathIdentity contract
  * 2. User deposits ETH collateral to BTCBackedVault
@@ -78,13 +78,11 @@ contract DemoUSD is ERC20, Ownable {
      * @return totalSupply_ Current total supply
      * @return vault_ Current vault address
      */
-    function getInfo() external view returns (
-        string memory name_,
-        string memory symbol_,
-        uint8 decimals_,
-        uint256 totalSupply_,
-        address vault_
-    ) {
+    function getInfo()
+        external
+        view
+        returns (string memory name_, string memory symbol_, uint8 decimals_, uint256 totalSupply_, address vault_)
+    {
         return (name(), symbol(), decimals(), totalSupply(), vault);
     }
 }

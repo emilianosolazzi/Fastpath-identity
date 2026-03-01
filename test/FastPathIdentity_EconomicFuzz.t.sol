@@ -20,12 +20,15 @@ contract Test {
     function assertTrue(bool condition, string memory message) internal pure {
         require(condition, message);
     }
+
     function assertEq(uint256 a, uint256 b, string memory message) internal pure {
         require(a == b, message);
     }
+
     function assertEq(address a, address b, string memory message) internal pure {
         require(a == b, message);
     }
+
     function assertEq(bytes20 a, bytes20 b, string memory message) internal pure {
         require(a == b, message);
     }
@@ -40,7 +43,9 @@ contract ReentrantWithdrawReceiver {
     FastPathIdentity public target;
     bool public reentered;
 
-    constructor(FastPathIdentity _target) { target = _target; }
+    constructor(FastPathIdentity _target) {
+        target = _target;
+    }
 
     receive() external payable {
         if (!reentered) {
@@ -80,16 +85,16 @@ contract ReentrantReceiveFundsReceiver {
  */
 contract FastPathIdentityEconomicFuzz is Test {
     // Storage slots (fastapthidentity.sol layout)
-    uint256 constant SLOT_ACTIVE_EVM  = 11;
-    uint256 constant SLOT_RECV_PREF   = 9;
-    uint256 constant SLOT_PENDING_WD  = 12;
+    uint256 constant SLOT_ACTIVE_EVM = 11;
+    uint256 constant SLOT_RECV_PREF = 9;
+    uint256 constant SLOT_PENDING_WD = 12;
     uint256 constant SLOT_ACCUMULATED = 13;
 
     FastPathIdentity public identity;
 
-    uint256 constant PRIVKEY       = 1;
-    uint8   constant PUBKEY_PREFIX = 0x02;
-    bytes32 constant PUBKEY_X      = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798;
+    uint256 constant PRIVKEY = 1;
+    uint8 constant PUBKEY_PREFIX = 0x02;
+    bytes32 constant PUBKEY_X = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798;
 
     address attacker;
     address victim;
@@ -97,9 +102,9 @@ contract FastPathIdentityEconomicFuzz is Test {
     function setUp() public {
         identity = new FastPathIdentity(0.001 ether);
         attacker = vm.addr(2);
-        victim   = vm.addr(PRIVKEY);
+        victim = vm.addr(PRIVKEY);
         vm.deal(attacker, 100 ether);
-        vm.deal(victim,   100 ether);
+        vm.deal(victim, 100 ether);
     }
 
     // ==========================================
@@ -130,7 +135,8 @@ contract FastPathIdentityEconomicFuzz is Test {
         bytes memory alphabet = "0123456789abcdef";
         bytes memory data = abi.encodePacked(a);
         bytes memory str = new bytes(42);
-        str[0] = "0"; str[1] = "x";
+        str[0] = "0";
+        str[1] = "x";
         for (uint256 i = 0; i < 20; i++) {
             str[2 + i * 2] = alphabet[uint8(data[i] >> 4)];
             str[3 + i * 2] = alphabet[uint8(data[i] & 0x0f)];
@@ -144,10 +150,18 @@ contract FastPathIdentityEconomicFuzz is Test {
 
     function _uintStr(uint256 v) internal pure returns (string memory) {
         if (v == 0) return "0";
-        uint256 tmp = v; uint256 d;
-        while (tmp != 0) { d++; tmp /= 10; }
+        uint256 tmp = v;
+        uint256 d;
+        while (tmp != 0) {
+            d++;
+            tmp /= 10;
+        }
         bytes memory buf = new bytes(d);
-        while (v != 0) { d--; buf[d] = bytes1(uint8(48 + v % 10)); v /= 10; }
+        while (v != 0) {
+            d--;
+            buf[d] = bytes1(uint8(48 + v % 10));
+            v /= 10;
+        }
         return string(buf);
     }
 
@@ -163,25 +177,49 @@ contract FastPathIdentityEconomicFuzz is Test {
     // VALUE FUNCTIONS (read by economic_fuzzer.py)
     // ==========================================
 
-    function valueETH() public view returns (int256) { return int256(attacker.balance); }
+    function valueETH() public view returns (int256) {
+        return int256(attacker.balance);
+    }
 
     function valueOwnership(bytes20 targetHash) public view returns (int256) {
         return identity.currentController(targetHash) == attacker ? type(int256).max : int256(0);
     }
 
-    function valueFees() public view returns (int256) { return int256(address(identity).balance); }
+    function valueFees() public view returns (int256) {
+        return int256(address(identity).balance);
+    }
 
     // ==========================================
     // SCENARIO METADATA (for economic_fuzzer.py)
     // ==========================================
 
-    function scenarioReentrancy()         public pure returns (string memory) { return "receiveFunds,withdrawPendingFunds"; }
-    function scenarioOwnershipTheft()     public pure returns (string memory) { return "initiateRelink,finalizeRelink"; }
-    function scenarioFeeTheft()           public pure returns (string memory) { return "withdrawFees"; }
-    function scenarioDoubleRegistration() public pure returns (string memory) { return "registerBitcoinAddressV2"; }
-    function maxTraceDepth()              public pure returns (uint256) { return 5; }
-    function minProfitThreshold()         public pure returns (uint256) { return 0.001 ether; }
-    function solverTimeout()              public pure returns (uint256) { return 60; }
+    function scenarioReentrancy() public pure returns (string memory) {
+        return "receiveFunds,withdrawPendingFunds";
+    }
+
+    function scenarioOwnershipTheft() public pure returns (string memory) {
+        return "initiateRelink,finalizeRelink";
+    }
+
+    function scenarioFeeTheft() public pure returns (string memory) {
+        return "withdrawFees";
+    }
+
+    function scenarioDoubleRegistration() public pure returns (string memory) {
+        return "registerBitcoinAddressV2";
+    }
+
+    function maxTraceDepth() public pure returns (uint256) {
+        return 5;
+    }
+
+    function minProfitThreshold() public pure returns (uint256) {
+        return 0.001 ether;
+    }
+
+    function solverTimeout() public pure returns (uint256) {
+        return 60;
+    }
 
     // ==========================================
     // ATTACK 1a: REENTRANCY — withdrawPendingFunds
@@ -203,9 +241,7 @@ contract FastPathIdentityEconomicFuzz is Test {
         //   1. nonReentrant blocks the inner call → receive() reverts
         //   2. the ETH transfer fails → TransferFailed() reverts the outer call too
         vm.prank(address(evil));
-        (bool success,) = address(identity).call(
-            abi.encodeWithSelector(identity.withdrawPendingFunds.selector)
-        );
+        (bool success,) = address(identity).call(abi.encodeWithSelector(identity.withdrawPendingFunds.selector));
         assertTrue(!success, "withdrawPendingFunds must revert when receiver re-enters");
 
         // Evil got nothing — balance unchanged
@@ -255,15 +291,8 @@ contract FastPathIdentityEconomicFuzz is Test {
         bytes memory victimPubkey = abi.encodePacked(bytes1(PUBKEY_PREFIX), PUBKEY_X);
 
         vm.prank(attacker);
-        (bool success,) = address(identity).call(
-            abi.encodeWithSelector(
-                identity.initiateRelink.selector,
-                victimHash,
-                attacker,
-                victimPubkey,
-                fakeSig
-            )
-        );
+        (bool success,) = address(identity)
+            .call(abi.encodeWithSelector(identity.initiateRelink.selector, victimHash, attacker, victimPubkey, fakeSig));
         assertTrue(!success, "initiateRelink must revert without valid BTC signature");
 
         // Victim retains control
@@ -283,9 +312,7 @@ contract FastPathIdentityEconomicFuzz is Test {
         uint256 attackerBefore = attacker.balance;
 
         vm.prank(attacker);
-        (bool success,) = address(identity).call(
-            abi.encodeWithSelector(identity.withdrawFees.selector)
-        );
+        (bool success,) = address(identity).call(abi.encodeWithSelector(identity.withdrawFees.selector));
         assertTrue(!success, "withdrawFees must revert for non-owner");
         assertEq(attacker.balance, attackerBefore, "attacker balance must not change");
         assertEq(address(identity).balance, 5 ether, "contract ETH must be untouched");
@@ -306,10 +333,7 @@ contract FastPathIdentityEconomicFuzz is Test {
 
         vm.prank(victim);
         (bool success,) = address(identity).call{value: 0.001 ether}(
-            abi.encodeWithSelector(
-                identity.registerBitcoinAddressV2.selector,
-                PUBKEY_PREFIX, PUBKEY_X, r, s, v, false
-            )
+            abi.encodeWithSelector(identity.registerBitcoinAddressV2.selector, PUBKEY_PREFIX, PUBKEY_X, r, s, v, false)
         );
         assertTrue(!success, "second registration from same EVM must revert");
     }
@@ -336,9 +360,8 @@ contract FastPathIdentityEconomicFuzz is Test {
         uint256 before = attacker.balance;
 
         vm.prank(attacker);
-        (bool success,) = address(identity).call{value: 1 ether}(
-            abi.encodeWithSelector(identity.receiveFunds.selector, randomHash)
-        );
+        (bool success,) =
+            address(identity).call{value: 1 ether}(abi.encodeWithSelector(identity.receiveFunds.selector, randomHash));
         assertTrue(!success, "receiveFunds to unregistered hash must revert");
         // After the revert the ETH was returned; gas cost is negligible vs 1 ether
         assertTrue(attacker.balance > before - 0.01 ether, "ETH must not be lost on revert");

@@ -121,11 +121,7 @@ contract BitID is ERC20, ERC20Permit, Ownable {
     /**
      * @param _identity Address of the deployed FastPathIdentity (Proof160) contract
      */
-    constructor(address _identity)
-        ERC20("BitID", "BITID")
-        ERC20Permit("BitID")
-        Ownable(msg.sender)
-    {
+    constructor(address _identity) ERC20("BitID", "BITID") ERC20Permit("BitID") Ownable(msg.sender) {
         if (_identity == address(0)) revert ZeroAddress();
         identity = IFastPathIdentity(_identity);
         emit IdentityUpdated(_identity);
@@ -172,7 +168,11 @@ contract BitID is ERC20, ERC20Permit, Ownable {
     }
 
     /// @dev Identity validation failure reason — typed, not string-based
-    enum IdentityFailure { None, NotRegistered, WrongController }
+    enum IdentityFailure {
+        None,
+        NotRegistered,
+        WrongController
+    }
 
     /**
      * @dev Shared identity validation logic used by both _checkIdentity (reverts)
@@ -181,7 +181,11 @@ contract BitID is ERC20, ERC20Permit, Ownable {
      * @return failure Typed failure reason (None if valid)
      * @return reason Human-readable reason for off-chain consumers
      */
-    function _validateIdentity(address addr) private view returns (bool valid, IdentityFailure failure, string memory reason) {
+    function _validateIdentity(address addr)
+        private
+        view
+        returns (bool valid, IdentityFailure failure, string memory reason)
+    {
         // Whitelisted addresses always pass (DEXs, routers, pools)
         if (transferWhitelist[addr]) return (true, IdentityFailure.None, "");
 
@@ -365,7 +369,7 @@ contract BitID is ERC20, ERC20Permit, Ownable {
      * @return reason Human-readable reason if invalid
      */
     function isIdentityValid(address addr) external view returns (bool valid, string memory reason) {
-        (bool v, , string memory r) = _validateIdentity(addr);
+        (bool v,, string memory r) = _validateIdentity(addr);
         return (v, r);
     }
 
@@ -402,16 +406,20 @@ contract BitID is ERC20, ERC20Permit, Ownable {
     /**
      * @notice Full token info in a single call
      */
-    function getInfo() external view returns (
-        string memory name_,
-        string memory symbol_,
-        uint8 decimals_,
-        uint256 totalSupply_,
-        uint256 maxSupply_,
-        uint256 mintable_,
-        bool identityGated_,
-        address identity_
-    ) {
+    function getInfo()
+        external
+        view
+        returns (
+            string memory name_,
+            string memory symbol_,
+            uint8 decimals_,
+            uint256 totalSupply_,
+            uint256 maxSupply_,
+            uint256 mintable_,
+            bool identityGated_,
+            address identity_
+        )
+    {
         uint256 current = totalSupply();
         return (
             name(),

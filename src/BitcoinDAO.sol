@@ -16,8 +16,8 @@ contract BitcoinDAO {
 
     struct Proposal {
         string description;
-        uint256 yesVotes;      // Satoshis voting yes
-        uint256 noVotes;       // Satoshis voting no
+        uint256 yesVotes; // Satoshis voting yes
+        uint256 noVotes; // Satoshis voting no
         uint256 endTime;
         bool executed;
         address proposer;
@@ -26,10 +26,10 @@ contract BitcoinDAO {
     // Proposal storage
     mapping(uint256 => Proposal) public proposals;
     uint256 public nextProposalId;
-    
+
     // Bitcoin Hash160 -> Balance in Satoshis (Oracle Data)
     mapping(bytes20 => uint256) public btcBalances;
-    
+
     // Proposal ID -> Bitcoin Hash160 -> Has Voted
     mapping(uint256 => mapping(bytes20 => bool)) public hasVoted;
 
@@ -50,7 +50,7 @@ contract BitcoinDAO {
 
     function createProposal(string memory description, uint256 votingDays) external returns (uint256) {
         require(votingDays > 0 && votingDays <= 30, "Voting period: 1-30 days");
-        
+
         uint256 proposalId = nextProposalId++;
         proposals[proposalId] = Proposal({
             description: description,
@@ -69,11 +69,11 @@ contract BitcoinDAO {
         Proposal storage p = proposals[proposalId];
         require(bytes(p.description).length > 0, "Proposal does not exist");
         require(block.timestamp < p.endTime, "Voting ended");
-        
+
         // 1. Verify Identity Link
         bytes20 btcHash160 = identityContract.evmToBtc(msg.sender);
         require(btcHash160 != bytes20(0), "No Bitcoin identity linked");
-        
+
         // 2. Check Double Voting
         require(!hasVoted[proposalId][btcHash160], "Already voted");
 
@@ -128,14 +128,18 @@ contract BitcoinDAO {
     // VIEW FUNCTIONS
     // ─────────────────────────────────────────────────────────────
 
-    function getProposal(uint256 proposalId) external view returns (
-        string memory description,
-        uint256 yesVotes,
-        uint256 noVotes,
-        uint256 endTime,
-        bool executed,
-        address proposer
-    ) {
+    function getProposal(uint256 proposalId)
+        external
+        view
+        returns (
+            string memory description,
+            uint256 yesVotes,
+            uint256 noVotes,
+            uint256 endTime,
+            bool executed,
+            address proposer
+        )
+    {
         Proposal storage p = proposals[proposalId];
         return (p.description, p.yesVotes, p.noVotes, p.endTime, p.executed, p.proposer);
     }

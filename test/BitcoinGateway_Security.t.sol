@@ -60,7 +60,7 @@ contract BitcoinGatewaySecurityTest is Test {
         reqId = gw.sendBitcoin(
             "bc1qsender",
             "bc1qreceiver",
-            10_000,          // 10k sats
+            10_000, // 10k sats
             "test payment"
         );
     }
@@ -68,12 +68,7 @@ contract BitcoinGatewaySecurityTest is Test {
     function _submitProof(uint256 reqId, address prover) internal {
         uint256 fee = gw.proofFee();
         vm.prank(prover);
-        gw.submitBitcoinProof{value: fee}(
-            reqId,
-            keccak256("btctxid"),
-            hex"04aaaa",
-            new bytes(64)
-        );
+        gw.submitBitcoinProof{value: fee}(reqId, keccak256("btctxid"), hex"04aaaa", new bytes(64));
     }
 
     // ════════════════════════════════════════════════════
@@ -88,12 +83,7 @@ contract BitcoinGatewaySecurityTest is Test {
 
         vm.expectRevert(BitcoinGateway.AlreadyFulfilled.selector);
         vm.prank(user1);
-        gw.submitBitcoinProof{value: fee}(
-            reqId,
-            keccak256("btctxid"),
-            hex"04aaaa",
-            new bytes(64)
-        );
+        gw.submitBitcoinProof{value: fee}(reqId, keccak256("btctxid"), hex"04aaaa", new bytes(64));
     }
 
     // ════════════════════════════════════════════════════
@@ -183,12 +173,7 @@ contract BitcoinGatewaySecurityTest is Test {
 
         vm.expectRevert(BitcoinGateway.AddressBlacklisted.selector);
         vm.prank(attacker);
-        gw.submitBitcoinProof{value: fee}(
-            reqId,
-            keccak256("txid"),
-            hex"04aaaa",
-            new bytes(64)
-        );
+        gw.submitBitcoinProof{value: fee}(reqId, keccak256("txid"), hex"04aaaa", new bytes(64));
     }
 
     // ════════════════════════════════════════════════════
@@ -211,12 +196,7 @@ contract BitcoinGatewaySecurityTest is Test {
 
         vm.expectRevert(BitcoinGateway.UserNotRegistered.selector);
         vm.prank(user2); // Not registered
-        gw.submitBitcoinProof{value: fee}(
-            reqId,
-            keccak256("txid"),
-            hex"04aaaa",
-            new bytes(64)
-        );
+        gw.submitBitcoinProof{value: fee}(reqId, keccak256("txid"), hex"04aaaa", new bytes(64));
     }
 
     // ════════════════════════════════════════════════════
@@ -257,12 +237,7 @@ contract BitcoinGatewaySecurityTest is Test {
 
         vm.expectRevert(BitcoinGateway.InsufficientProofFee.selector);
         vm.prank(user1);
-        gw.submitBitcoinProof{value: fee - 1}(
-            reqId,
-            keccak256("txid"),
-            hex"04aaaa",
-            new bytes(64)
-        );
+        gw.submitBitcoinProof{value: fee - 1}(reqId, keccak256("txid"), hex"04aaaa", new bytes(64));
     }
 
     // ════════════════════════════════════════════════════
@@ -319,12 +294,7 @@ contract BitcoinGatewaySecurityTest is Test {
 
         vm.expectRevert(BitcoinGateway.ContractPaused.selector);
         vm.prank(user1);
-        gw.submitBitcoinProof{value: fee}(
-            reqId,
-            keccak256("txid"),
-            hex"04aaaa",
-            new bytes(64)
-        );
+        gw.submitBitcoinProof{value: fee}(reqId, keccak256("txid"), hex"04aaaa", new bytes(64));
     }
 
     function testL3_PausedBlocksRegister() public {
