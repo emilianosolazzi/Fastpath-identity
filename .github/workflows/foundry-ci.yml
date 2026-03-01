@@ -37,17 +37,11 @@ jobs:
       - name: Test
         run: forge test --gas-report
 
-      - name: Gas benchmark scenarios
-        run: forge test --match-path tests/ERC721H_Gas.t.sol --gas-report
+      - name: Security tests
+        run: forge test --match-path "test/*Security*" -vvv
 
-      - name: Invariant tests (FFI enabled)
-        run: forge test --match-path tests/ERC721H_Invariant.t.sol --ffi
-
-      - name: Compatibility tests
-        run: forge test --match-path tests/ERC721H_Compatibility.t.sol
-
-      - name: Rollup fork smoke tests
-        run: forge test --match-path tests/ERC721H_RollupForks.t.sol
+      - name: Invariant / fuzz tests
+        run: forge test --match-path "test/Invariant_Fuzz*" -vvv
 
   static-analysis:
     runs-on: ubuntu-latest
@@ -92,4 +86,4 @@ jobs:
         run: slither . --config-file slither.config.json || true
 
       - name: Run Mythril (Docker)
-        run: docker run --rm -v "$PWD":/src mythril/myth analyze /src/src/ERC-721H.sol --solv 0.8.30 --execution-timeout 120 || true
+        run: docker run --rm -v "$PWD":/src mythril/myth analyze /src/src/Fastpathidentity.sol --solv 0.8.30 --execution-timeout 120 || true

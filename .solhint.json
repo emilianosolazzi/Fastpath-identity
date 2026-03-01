@@ -4,6 +4,7 @@
   "rules": {
     "compiler-version": ["error", "^0.8.30"],
     "func-visibility": ["error", { "ignoreConstructors": true }],
+    "quotes": "off",
     "max-line-length": ["warn", 130],
     "no-empty-blocks": "warn",
     "no-unused-vars": "error",
