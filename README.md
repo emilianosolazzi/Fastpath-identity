@@ -17,9 +17,12 @@
 
 ## Overview
 
-Fastpath Identity implements the **Proof160 Protocol** — a system that creates permanent, on-chain links between Bitcoin addresses and EVM addresses using the Hash160 cryptographic primitive (`RIPEMD160(SHA256(pubkey))`). Every registration is verified by a Bitcoin signature proving private key ownership, meaning **zero trust is required**.
+Fastpath Identity implements the **Proof160 Protocol** — a system that creates permanent, 
+on-chain links between Bitcoin addresses and EVM addresses using the Hash160 cryptographic primitive (`RIPEMD160(SHA256(pubkey))`). 
+Every registration is verified by a Bitcoin signature proving private key ownership, meaning **zero trust is required**.
 
-On top of this identity layer, the protocol provides a complete ecosystem: a naming service (`.btc` domains), a utility token, a payment gateway, an attestation-based lending vault, governance, and an early adopter NFT — all gated by Bitcoin identity.
+On top of this identity layer, the protocol provides a complete ecosystem: 
+a naming service (`.btc` domains), a utility token, a payment gateway, an attestation-based lending vault, governance, and an early adopter NFT — all gated by Bitcoin identity.
 
 ## Architecture
 
